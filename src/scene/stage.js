@@ -1,66 +1,114 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { createBuilding, TOP } from './building.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { FXAAShader } from 'three/addons/shaders/FXAAShader.js';
+import { createBuilding, TOP, FOCUS } from './building.js';
 import { createWorld, BG } from './world.js';
+import { createOffice } from './office.js';
+import { createLobby } from './lobby.js';
+import { createSite } from './site.js';
 
 const DEG = Math.PI / 180;
+const LOBBY_C = new THREE.Vector3(0, 3, 0);
 
-/** Numeric scene state — every field is tweenable. */
+/** Numeric scene state — every field is tweenable, so every change is reversible and smooth. */
 export const DEFAULT_STATE = {
-  az: 35, el: 12, dist: 105, ty: 22, sx: 0.18, sy: 0, fov: 34,
-  explode: 0, twist: 1, chess: 0, night: 1, build: TOP + 2, glassLag: 0, ghost: 0,
-  fill: -10, fillAmt: 0, hiFloor: -10, hi: 0, crane: 0, nodes: 0, dim: 1, grid: 1, site: 1,
-  orbit: 0, sway: 1,
+  // camera: orbit around (tx, ty, tz)
+  az: 35, el: 12, dist: 105, tx: 0, ty: 22, tz: 0, sx: 0.18, sy: 0, fov: 34, orbit: 0, sway: 1,
+  // facade
+  night: 1, build: TOP + 2, glassLag: 0, ghost: 0, fill: -10, fillAmt: 0, chess: 0, focus: 0, dim: 1, lobbyGlass: 1,
+  // world
+  nodes: 0, grid: 1, site: 1, crane: 0, yard: 0,
+  // interiors
+  office: 0, screens: 0, laptop: 0, fly: 0, sales: 0, sign: 0, crew: 0, gate: 0,
 };
 
-export function createStage(canvas) {
+export function createStage(canvas, images) {
   const isTouch = matchMedia('(pointer: coarse)').matches;
-  // Pixel budget: high-density screens render slightly below native density (edges stay crisp,
-  // the GPU keeps headroom); MSAA only where pixels are large enough to need it.
+  // Pixel budget: high-density screens render slightly below native density; MSAA only where
+  // pixels are large enough to need it.
   const area = window.innerWidth * window.innerHeight;
-  const budget = isTouch ? 2.4e6 : 3.2e6;
+  const budget = isTouch ? 2.1e6 : 3.0e6;
   const maxDpr = Math.max(1, Math.min(window.devicePixelRatio || 1, isTouch ? 2 : 1.5, Math.sqrt(budget / area)));
   let dpr = maxDpr;
-  const renderer = new THREE.WebGLRenderer({
-    canvas,
-    antialias: dpr * dpr * area <= 2.3e6,
-    powerPreference: 'high-performance',
-    stencil: false,
-  });
+  const q = new URLSearchParams(location.search);
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance', stencil: false });
+  // GPU tier: multisampling an HDR target is cheap on discrete and Apple GPUs but eats the
+  // budget of integrated ones — those get FXAA instead
+  const gl = renderer.getContext();
+  const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+  const gpu = dbg ? String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)) : '';
+  const weak = isTouch || /Intel|UHD|Iris|Mali|Adreno|PowerVR|SwiftShader|llvmpipe|Microsoft Basic/i.test(gpu);
+  if (weak && !isTouch) dpr = Math.min(dpr, 1.25);
+  // one anti-aliasing path for every device (FXAA below 1.5x density) so the HDR glow looks
+  // identical everywhere; ?msaa=4 is kept for comparisons only
+  const msaa = q.has('msaa') ? +q.get('msaa') : 0;
+  const useFxaa = q.get('fxaa') !== '0' && msaa === 0 && dpr < 1.5;
   renderer.setClearColor(BG, 1);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.05;
+  renderer.toneMapping = THREE.NeutralToneMapping;
+  renderer.toneMappingExposure = 1.0;
   renderer.localClippingEnabled = true;
-
   renderer.setPixelRatio(dpr);
 
   const scene = new THREE.Scene();
-  scene.fog = new THREE.Fog(0x181b15, 160, 520);
-
+  scene.fog = new THREE.Fog(0x181b15, 170, 560);
   const pmrem = new THREE.PMREMGenerator(renderer);
   scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-  scene.environmentIntensity = 0.32;
+  scene.environmentIntensity = 0.34;
   pmrem.dispose();
 
-  scene.add(new THREE.HemisphereLight(0xb8c4cc, 0x14160f, 0.7));
-  const key = new THREE.DirectionalLight(0xffe3c0, 1.75);
+  scene.add(new THREE.HemisphereLight(0xb8c4cc, 0x17140f, 0.75));
+  const key = new THREE.DirectionalLight(0xffe2bd, 1.6);
   key.position.set(-50, 70, 60);
   scene.add(key);
-  const rim = new THREE.DirectionalLight(0x9fb6ff, 0.55);
+  const rim = new THREE.DirectionalLight(0x9fb6ff, 0.5);
   rim.position.set(60, 30, -50);
   scene.add(rim);
+  // interior lights (always present so shader programs never change)
+  const officeLight = new THREE.PointLight(0xffcf9a, 0, 14, 2);
+  officeLight.position.set(6, 50.6, 4.8);
+  const lobbyLight = new THREE.PointLight(0xffd2a0, 16, 24, 1.6);
+  lobbyLight.position.set(0, 5.4, 1);
+  scene.add(officeLight, lobbyLight);
 
+  const anchors = new Map();
   const world = createWorld();
   scene.add(world.group);
   const building = createBuilding();
   scene.add(building.root);
+  const office = createOffice({ building, images, anchors });
+  scene.add(office.group, office.linkGroup);
+  const lobby = createLobby({ images, anchors });
+  scene.add(lobby.group);
+  const site = createSite({ images, anchors });
+  scene.add(site.group);
+  const focusIds = Object.values(FOCUS).map(f => f.floor * 100 + f.apt);
+  building.glassUniforms.uFocus.value.set(...focusIds);
 
-  const camera = new THREE.PerspectiveCamera(34, 1, 1, 2000);
-  const baseConcrete = building.materials.concrete.color.clone();
-  const baseMetal = building.materials.metal.color.clone();
+  const camera = new THREE.PerspectiveCamera(34, 1, 0.5, 2400);
+  const baseStone = building.materials.stone.color.clone();
+  const baseBronze = building.materials.bronze.color.clone();
   let lastDim = -1;
   const target = new THREE.Vector3();
+
+  // ---------- post: bloom gives windows, lamps and lime accents their glow ----------
+  const rt = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: msaa });
+  const composer = new EffectComposer(renderer, rt);
+  composer.addPass(new RenderPass(scene, camera));
+  // threshold above 1: only emissive things (lamps, screens, lime lines, lit windows) glow,
+  // never a merely well-lit surface
+  const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.5, 0.42, 1.05);
+  composer.addPass(bloom);
+  if (q.get('bloom') === '0') bloom.enabled = false;
+  composer.addPass(new OutputPass());
+  const fxaa = new ShaderPass(FXAAShader);
+  fxaa.enabled = useFxaa;
+  composer.addPass(fxaa);
 
   const state = { ...DEFAULT_STATE };
   const pointer = { x: 0, y: 0, tx: 0, ty: 0 };
@@ -69,13 +117,22 @@ export function createStage(canvas) {
   let time = 0;
   const listeners = [];
 
+  function setRenderSize() {
+    renderer.setPixelRatio(dpr);
+    renderer.setSize(width, height, false);
+    composer.setPixelRatio(dpr);
+    composer.setSize(width, height);
+    // bloom works at half resolution: same look, a quarter of the cost
+    bloom.resolution.set(width * dpr * 0.5, height * dpr * 0.5);
+    bloom.setSize(width * dpr * 0.5, height * dpr * 0.5);
+    fxaa.material.uniforms.resolution.value.set(1 / (width * dpr), 1 / (height * dpr));
+  }
+
   function resize(force) {
-    const w = window.innerWidth;
-    const h = window.innerHeight;
-    // ignore small height jitter from mobile browser chrome
+    const w = window.innerWidth, h = window.innerHeight;
     if (!force && w === width && Math.abs(h - height) < 120) return;
     width = w; height = h;
-    renderer.setSize(w, h, false);
+    setRenderSize();
     canvas.style.width = '100%';
     canvas.style.height = '100%';
     camera.aspect = w / h;
@@ -86,69 +143,75 @@ export function createStage(canvas) {
 
   function applyState(dt) {
     const s = state;
-    // camera
-    const aspectK = portrait() ? Math.min(1.95, Math.pow(0.9 / (width / height), 0.62)) : Math.max(0.92, Math.pow(1.6 / (width / height), 0.35));
-    const sway = s.sway * Math.sin(time * 0.35) * 2.2;
-    const az = (s.az + orbitAcc + sway + pointer.x * 4) * DEG;
-    const el = (s.el + pointer.y * 2.2) * DEG;
+    // 0 = interior close-up, 1 = exterior; continuous so fly-ins never jump
+    const ext = THREE.MathUtils.smoothstep(s.dist, 12, 60);
+    const kExt = portrait() ? Math.min(1.95, Math.pow(0.9 / (width / height), 0.62)) : Math.max(0.92, Math.pow(1.6 / (width / height), 0.35));
+    const kInt = portrait() ? 1.3 : 1;
+    const aspectK = THREE.MathUtils.lerp(kInt, kExt, ext);
+    const swayAmt = s.sway * THREE.MathUtils.lerp(0.5, 2.2, ext);
+    const az = (s.az + orbitAcc + Math.sin(time * 0.35) * swayAmt + pointer.x * THREE.MathUtils.lerp(1.6, 4, ext)) * DEG;
+    const el = (s.el + pointer.y * THREE.MathUtils.lerp(1, 2.2, ext)) * DEG;
     const dist = s.dist * aspectK;
-    target.set(0, s.ty, 0);
+    target.set(s.tx, s.ty, s.tz);
     camera.position.set(
       target.x + Math.sin(az) * Math.cos(el) * dist,
       target.y + Math.sin(el) * dist,
       target.z + Math.cos(az) * Math.cos(el) * dist,
     );
     camera.lookAt(target);
-    if (camera.fov !== s.fov) { camera.fov = s.fov; }
+    camera.fov = s.fov;
+    camera.near = THREE.MathUtils.clamp(dist * 0.012, 0.02, 1);
     const sx = portrait() ? 0 : s.sx;
     const sy = portrait() ? s.sy : 0;
     camera.setViewOffset(width, height, -sx * width, sy * height, width, height);
     camera.updateProjectionMatrix();
 
-    // building
-    building.setExplode(s.explode, s.twist);
     building.setBuild(s.build, s.glassLag);
     building.setGhost(s.ghost);
-    building.setCrane(s.crane, time);
     const u = building.glassUniforms;
     u.uNight.value = s.night;
     u.uChess.value = s.chess;
+    u.uFocusAmt.value = s.focus;
     u.uFill.value = s.fill;
     u.uFillAmt.value = s.fillAmt;
-    u.uHiFloor.value = s.hiFloor;
-    u.uHi.value = s.hi;
     u.uDim.value = s.dim;
+    u.uLobby.value = s.lobbyGlass;
+    u.uTime.value = time;
     if (s.dim !== lastDim) {
       lastDim = s.dim;
-      const m = building.materials;
-      m.concrete.color.copy(baseConcrete).multiplyScalar(0.35 + 0.65 * s.dim);
-      m.metal.color.copy(baseMetal).multiplyScalar(0.35 + 0.65 * s.dim);
+      building.materials.stone.color.copy(baseStone).multiplyScalar(0.35 + 0.65 * s.dim);
+      building.materials.bronze.color.copy(baseBronze).multiplyScalar(0.35 + 0.65 * s.dim);
     }
-    u.uTime.value = time;
     world.groundUniforms.uGrid.value = s.grid;
     world.groundUniforms.uSite.value = s.site;
     world.nodes.set(s.nodes);
+    world.yard.visible = s.yard > 0.001;
+    officeLight.intensity = 12 * s.office;
+
+    office.update(time, s, portrait(), camera);
+    lobby.update(time, dt, s, camera.position.distanceTo(LOBBY_C) < 42);
+    site.update(time, dt, s);
   }
 
-  // adaptive resolution — keeps frame time in budget on weaker GPUs
-  let acc = 0, frames = 0, slow = 0, slowWindows = 0;
+  // ---------- adaptive quality: bloom off first, then resolution ----------
+  let acc = 0, frames = 0, slow = 0, slowWindows = 0, adaptOff = false;
   function adapt(dt) {
+    if (adaptOff) return;
     acc += dt; frames++;
     if (dt > 1 / 45) slow++;
     if (acc < 1) return;
     const frac = slow / frames;
     acc = 0; frames = 0; slow = 0;
     if (frac > 0.08 && document.visibilityState === 'visible') slowWindows++; else slowWindows = 0;
-    if (slowWindows >= 2 && dpr > 0.8) {
-      dpr = Math.max(0.8, +(dpr - 0.2).toFixed(2));
-      renderer.setPixelRatio(dpr);
-      renderer.setSize(width, height, false);
-      slowWindows = 0;
-    }
+    if (slowWindows < 2) return;
+    slowWindows = 0;
+    if (bloom.enabled) { bloom.enabled = false; return; }
+    if (dpr > 0.8) { dpr = Math.max(0.8, +(dpr - 0.2).toFixed(2)); setRenderSize(); }
   }
 
   let last = performance.now();
   let running = false;
+  const cpu = { apply: 0, render: 0 };
   function frame(now) {
     if (!running) return;
     requestAnimationFrame(frame);
@@ -158,9 +221,14 @@ export function createStage(canvas) {
     orbitAcc += state.orbit * dt;
     pointer.x += (pointer.tx - pointer.x) * Math.min(1, dt * 3);
     pointer.y += (pointer.ty - pointer.y) * Math.min(1, dt * 3);
+    const c0 = performance.now();
     world.update(time);
     applyState(dt);
-    renderer.render(scene, camera);
+    const c1 = performance.now();
+    composer.render(dt);
+    const c2 = performance.now();
+    cpu.apply = cpu.apply * 0.9 + (c1 - c0) * 0.1;
+    cpu.render = cpu.render * 0.9 + (c2 - c1) * 0.1;
     for (const fn of listeners) fn(camera, width, height, time);
     adapt(dt);
   }
@@ -173,33 +241,39 @@ export function createStage(canvas) {
       pointer.ty = (e.clientY / window.innerHeight) * 2 - 1;
     }, { passive: true });
   }
-
   resize(true);
 
   return {
-    renderer, scene, camera, building, world, state,
+    renderer, scene, camera, building, world, office, lobby, site, state, anchors, composer, bloom, rt, gpu, weak,
+    lights: { officeLight, lobbyLight, key, rim },
+    get dpr() { return dpr; },
+    cpu,
+    setDpr(v) { dpr = v; setRenderSize(); },
+    noAdapt() { adaptOff = true; },
     get time() { return time; },
     get size() { return { width, height }; },
     portrait,
     onFrame(fn) { listeners.push(fn); },
-    /** Absorb the accumulated idle orbit into az so the next tween starts from what is on screen. */
+    /** glass of these floors dissolves around the camera (fly-through); y = floor centre or -100 */
+    setOpen(yA, yB) {
+      const u = building.glassUniforms;
+      u.uOpenA.value.set(yA ?? -100, yA == null ? 0 : 1);
+      u.uOpenB.value.set(yB ?? -100, yB == null ? 0 : 1);
+    },
     settleOrbit() {
       state.az = ((state.az + orbitAcc) % 360 + 540) % 360 - 180;
       orbitAcc = 0;
     },
-    /** Compile every shader variant and upload geometry before the first visible frame. */
+    /** Compile every shader variant and upload every buffer and texture before the first visible frame. */
     async warmup(states) {
-      building.crane.visible = true;
-      world.nodes.group.visible = true;
       for (const st of states) {
         Object.assign(state, DEFAULT_STATE, st);
-        applyState(0);
-        building.crane.visible = true;
-        world.nodes.group.visible = true;
-        renderer.render(scene, camera);
+        applyState(1 / 60);
+        composer.render(1 / 60);
         await new Promise(r => requestAnimationFrame(r));
       }
       if (renderer.compileAsync) await renderer.compileAsync(scene, camera);
+      Object.assign(state, DEFAULT_STATE);
     },
     start() {
       if (running) return;
@@ -207,6 +281,5 @@ export function createStage(canvas) {
       last = performance.now();
       requestAnimationFrame(frame);
     },
-    renderOnce() { applyState(0); renderer.render(scene, camera); },
   };
 }

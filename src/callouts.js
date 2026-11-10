@@ -17,16 +17,14 @@ export function createCallouts(container, stage) {
   let active = new Set();
   let mobile = stage.portrait();
 
-  function resolveApt(q) {
-    const list = building.apartments.filter(a => a.side === q.side && a.state === q.state);
-    list.sort((a, b) => Math.abs(a.floor - q.near) - Math.abs(b.floor - q.near) || Math.abs(a.pos.x) - Math.abs(b.pos.x));
-    const a = list[0];
+  function resolveApt(id) {
+    const a = building.aptById(id);
     return { floor: a.floor, p: [a.pos.x, a.pos.y, a.pos.z], n: [a.normal.x, a.normal.y, a.normal.z] };
   }
 
   function make(spec, isNode) {
     let s = spec;
-    if (spec.apt) s = { ...spec, ...resolveApt(spec.apt) };
+    if (spec.aptId != null) s = { ...spec, ...resolveApt(spec.aptId) };
     const side = s.side || 'r';
     const el = document.createElement('div');
     el.className = `co co-${side} tone-${s.tone || 'lime'}${isNode ? ' co-node' : ''}`;
@@ -57,6 +55,9 @@ export function createCallouts(container, stage) {
       isNode,
       mobileOk: s.m !== false,
       floor: s.floor,
+      obj: s.at ? stage.anchors.get(s.at) : null,
+      k: s.k || 0,
+      until: s.until ?? null,
       local: s.p ? new THREE.Vector3(...s.p) : null,
       world: s.world ? new THREE.Vector3(...s.world) : s.pos ? s.pos.clone() : null,
       normal: s.n ? new THREE.Vector3(...s.n).normalize() : null,
@@ -104,7 +105,7 @@ export function createCallouts(container, stage) {
   function fits(item, side, x, y, w, h, peers) {
     const r = rectFor(item, side, x, y);
     const edgeR = w - (mobile ? 8 : 64);
-    if (r.left < 8 || r.right > edgeR || r.top < (mobile ? 56 : 70) || r.bottom > h - 8) return false;
+    if (r.left < 8 || r.right > edgeR || r.top < (mobile ? 56 : 70) || r.bottom > h - (mobile ? 8 : 64)) return false;
     for (const a of avoid) if (hit(r, a, 10, 6)) return false;
     for (const p of peers) if (p !== item && p.rect && !p.blocked && p.shown > 0.01 && hit(r, p.rect, 8, 4)) return false;
     return true;
@@ -129,6 +130,7 @@ export function createCallouts(container, stage) {
   });
 
   function anchorWorld(item, out) {
+    if (item.obj) return item.obj.localToWorld(item.local ? out.copy(item.local) : out.set(0, 0, 0));
     if (item.world) return out.copy(item.world);
     const fl = building.floors[item.floor];
     return fl.localToWorld(out.copy(item.local));
@@ -157,10 +159,10 @@ export function createCallouts(container, stage) {
     }
   });
 
-  function show(idx, delay = 0) {
+  function show(idx, delay = 0, key = 0) {
     active.add(idx);
     gsap.delayedCall(Math.max(0, delay - 0.05), () => measure(idx));
-    sets[idx].forEach((item, k) => {
+    sets[idx].filter(item => item.k === key).forEach((item, k) => {
       if (mobile && !item.mobileOk) { item.el.style.visibility = 'hidden'; return; }
       item.tick = 0;
       item.vis = 0;
@@ -176,8 +178,8 @@ export function createCallouts(container, stage) {
     });
   }
 
-  function hide(idx) {
-    sets[idx].forEach(item => {
+  function hide(idx, key = null) {
+    sets[idx].filter(item => key === null || item.until === key).forEach(item => {
       gsap.killTweensOf([item, item.path, item.dot, item.text]);
       gsap.to(item, {
         shown: 0, duration: 0.3, ease: 'power1.in',
@@ -204,5 +206,5 @@ export function createCallouts(container, stage) {
     all.forEach(i => { i.el.style.visibility = 'hidden'; i.el.style.opacity = '0'; });
   }
 
-  return { show, hide, prewarm, count: idx => sets[idx].length };
+  return { show, hide, prewarm, count: (idx, key) => sets[idx].filter(i => key == null || i.k === key).length };
 }

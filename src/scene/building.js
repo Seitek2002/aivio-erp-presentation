@@ -1,55 +1,61 @@
 import * as THREE from 'three';
-import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { rng, box, cyl, roundedRect, outline, slabFromOutline, ribbon, mergeSafe } from './geo.js';
+import { materials } from './materials.js';
 
 /*
-  Procedural residential tower modelled after the demo project "Ала-Тоо Residence":
-  14 floors — glazed lobby, 11 typical floors, a club floor and a set-back penthouse.
-  Every floor is its own group so the tower can be "exploded" floor by floor.
+  Premium residential tower modelled after the demo project "Ала-Тоо Residence".
+  14 floors: a double-height glazed lobby behind a bronze colonnade, 12 apartment floors with
+  flowing limestone balconies (each slab ripples a little further round than the one below),
+  and a top floor with the developer's office under a bronze crown with a lime light line.
 */
 
 export const SLAB = 0.32;
+export const MAIN = roundedRect(15, 9, 5);
+export const LOBBY = roundedRect(13.4, 7.4, 3.4);
 export const FLOORS = [];
 {
   let y = 0;
   for (let i = 0; i < 14; i++) {
-    const lobby = i === 0;
-    const pent = i === 13;
-    const h = lobby ? 4.8 : pent ? 3.8 : 3.3;
-    FLOORS.push({ i, y, h, w: pent ? 20 : 30, d: pent ? 12 : 16, ox: pent ? -3 : 0, lobby, pent });
+    const h = i === 0 ? 6.4 : i === 13 ? 4.2 : 3.4;
+    FLOORS.push({ i, y, h, lobby: i === 0, top: i === 13 });
     y += h;
   }
 }
 export const TOP = FLOORS[13].y + FLOORS[13].h + SLAB;
 export const floorMid = i => FLOORS[i].y + FLOORS[i].h * 0.55;
+export const floorTop = i => FLOORS[i].y + SLAB; // walking surface of floor i
 
-// apartment status for the facade "шахматка": 0 free, 1 booked, 2 sold, -1 non-residential
-function rng(seed) {
-  let s = seed >>> 0;
-  return () => {
-    s = (s + 0x6d2b79f5) >>> 0;
-    let t = s;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
+const PANELS = 56;
+const APT_PANELS = 4;
+const APT_SHIFT = 2; // apartments are centred on the front of the building
+const PW = MAIN.P / PANELS;
+
+/** Balcony depth: a slow wave travelling round the tower, shifted floor by floor. */
+export function slabOffset(s, i) {
+  if (i === 14) return 1.5; // roof
+  const wave = 0.5 + 0.5 * Math.sin((2 * Math.PI * s) / (MAIN.P / 4) + i * 0.72);
+  let d = 0.85 + 1.55 * wave;
+  if (i === 1) { // canopy over the entrance
+    const sf = ((s + MAIN.P / 2) % MAIN.P) - MAIN.P / 2;
+    d = 1.9 + 3.6 * Math.exp(-((sf / 5.5) ** 2));
+  }
+  return d;
 }
 
-const SIDES = [
-  { n: [0, 0, 1], r: [1, 0, 0], long: true },
-  { n: [1, 0, 0], r: [0, 0, -1], long: false },
-  { n: [0, 0, -1], r: [-1, 0, 0], long: true },
-  { n: [-1, 0, 0], r: [0, 0, 1], long: false },
-];
+// demo apartments shown on the laptop's шахматка, pinned to real facade cells
+export const FOCUS = {
+  1131: { floor: 12, apt: 13, state: 2 },
+  1122: { floor: 11, apt: 0, state: 0 },
+  1125: { floor: 11, apt: 1, state: 1 },
+};
+const forced = new Map(Object.values(FOCUS).map(f => [f.floor * 100 + f.apt, f.state]));
 
-class QuadBuffer {
+class Quads {
   constructor() { this.p = []; this.n = []; this.uv = []; this.idx = []; this.attr = {}; this.count = 0; }
-  quad(c, r, u, nrm, w, h, attrs) {
-    const hw = w / 2, hh = h / 2;
-    const pts = [[-hw, -hh, 0, 0], [hw, -hh, 1, 0], [hw, hh, 1, 1], [-hw, hh, 0, 1]];
-    for (const [a, b, s, t] of pts) {
-      this.p.push(c.x + r.x * a + u.x * b, c.y + r.y * a + u.y * b, c.z + r.z * a + u.z * b);
-      this.n.push(nrm.x, nrm.y, nrm.z);
-      this.uv.push(s, t);
+  quad(a, b, y0, y1, nrm, attrs) {
+    const pts = [[a.x, y0, a.z, 0, 0], [b.x, y0, b.z, 1, 0], [b.x, y1, b.z, 1, 1], [a.x, y1, a.z, 0, 1]];
+    for (const [x, y, z, u, v] of pts) {
+      this.p.push(x, y, z); this.n.push(nrm.x, 0, nrm.z); this.uv.push(u, v);
       for (const k in attrs) (this.attr[k] ||= []).push(attrs[k]);
     }
     const o = this.count;
@@ -67,31 +73,17 @@ class QuadBuffer {
   }
 }
 
-function box(w, h, d, x, y, z) {
-  const g = new THREE.BoxGeometry(w, h, d);
-  g.translate(x, y, z);
-  return g;
-}
-
 const GLASS_VERT = /* glsl */ `
-  attribute float aState;
-  attribute float aLit;
-  attribute float aSeed;
-  attribute float aFloor;
-  varying vec2 vUv;
-  varying vec3 vW;
-  varying vec3 vN;
-  varying float vState;
-  varying float vLit;
-  varying float vSeed;
-  varying float vFloor;
+  attribute float aState; attribute float aLit; attribute float aSeed; attribute float aFloor; attribute float aApt;
+  varying vec2 vUv; varying vec3 vW; varying vec3 vN;
+  varying float vState; varying float vLit; varying float vSeed; varying float vFloor; varying float vApt;
   #include <clipping_planes_pars_vertex>
   void main() {
     vUv = uv;
     vec4 wp = modelMatrix * vec4(position, 1.0);
     vW = wp.xyz;
     vN = normalize(mat3(modelMatrix) * normal);
-    vState = aState; vLit = aLit; vSeed = aSeed; vFloor = aFloor;
+    vState = aState; vLit = aLit; vSeed = aSeed; vFloor = aFloor; vApt = aApt;
     vec4 mvPosition = viewMatrix * wp;
     gl_Position = projectionMatrix * mvPosition;
     #include <clipping_planes_vertex>
@@ -99,34 +91,25 @@ const GLASS_VERT = /* glsl */ `
 `;
 
 const GLASS_FRAG = /* glsl */ `
-  uniform float uNight;
-  uniform float uChess;
-  uniform float uBuild;
-  uniform float uFill;
-  uniform float uFillAmt;
-  uniform float uHiFloor;
-  uniform float uHi;
-  uniform float uDim;
-  uniform float uTime;
-  uniform vec3 uFree;
-  uniform vec3 uBooked;
-  uniform vec3 uSold;
-  uniform vec3 uLime;
-  uniform vec3 uWarm;
-  varying vec2 vUv;
-  varying vec3 vW;
-  varying vec3 vN;
-  varying float vState;
-  varying float vLit;
-  varying float vSeed;
-  varying float vFloor;
+  uniform float uNight, uChess, uBuild, uFill, uFillAmt, uDim, uTime, uFocusAmt, uLobby;
+  uniform vec3 uFocus;
+  uniform vec2 uOpenA, uOpenB;
+  uniform vec3 uFree, uBooked, uSold, uLime, uWarm;
+  varying vec2 vUv; varying vec3 vW; varying vec3 vN;
+  varying float vState; varying float vLit; varying float vSeed; varying float vFloor; varying float vApt;
   #include <clipping_planes_pars_fragment>
 
   vec3 sky(vec3 r) {
     float t = clamp(r.y * 0.5 + 0.5, 0.0, 1.0);
-    vec3 c = mix(vec3(0.012, 0.014, 0.011), vec3(0.16, 0.19, 0.2), smoothstep(0.38, 0.8, t));
-    c += vec3(0.55, 0.42, 0.28) * pow(max(dot(r, normalize(vec3(-0.55, 0.12, 0.8))), 0.0), 24.0) * 0.5;
+    vec3 c = mix(vec3(0.010, 0.011, 0.010), vec3(0.11, 0.13, 0.15), smoothstep(0.42, 0.85, t));
+    c += vec3(0.55, 0.36, 0.18) * pow(1.0 - abs(r.y), 18.0) * 0.35;          // warm city glow on the horizon
+    c += vec3(0.9, 0.7, 0.45) * pow(max(dot(r, normalize(vec3(-0.55, 0.1, 0.83))), 0.0), 40.0) * 0.4;
     return c;
+  }
+  float openAt(vec2 o) {
+    float band = 1.0 - smoothstep(1.6, 2.6, abs(vW.y - o.x));
+    float near = 1.0 - smoothstep(5.0, 20.0, distance(cameraPosition, vW));
+    return band * near * o.y;
   }
 
   void main() {
@@ -134,234 +117,211 @@ const GLASS_FRAG = /* glsl */ `
     if (vW.y > uBuild) discard;
     vec3 N = normalize(vN);
     vec3 V = normalize(cameraPosition - vW);
-    float ndv = max(dot(N, V), 0.0);
-    float fres = pow(1.0 - ndv, 3.0);
+    float fres = pow(1.0 - max(dot(N, V), 0.0), 3.0);
     vec3 R = reflect(-V, N);
 
-    // window frame: transom + jambs
+    float lobby = step(vFloor, 0.5);
+    // interior light: warm cove at the ceiling, sheer curtains, a few cooler screens
+    float on = max(step(1.0 - uNight * 0.44, vLit), lobby);
+    float isFocus = (1.0 - step(0.5, abs(vApt - uFocus.x))) + (1.0 - step(0.5, abs(vApt - uFocus.y))) + (1.0 - step(0.5, abs(vApt - uFocus.z)));
+    on *= mix(1.0, isFocus, uFocusAmt);
+    float cove = smoothstep(0.88, 0.97, vUv.y) * (1.0 - smoothstep(0.97, 1.0, vUv.y));
+    float grad = mix(0.35, 0.95, smoothstep(0.0, 0.9, vUv.y));
+    float curtain = 0.78 + 0.22 * sin(vUv.x * 40.0 + vSeed * 20.0);
+    vec3 warm = mix(uWarm, vec3(0.75, 0.82, 1.0), step(0.93, vSeed));
+    vec3 interior = warm * on * (grad * curtain * 0.55 + cove * 1.6) * mix(0.8, 1.2, vSeed);
+    interior *= mix(1.0, 1.45, lobby);
+
+    vec3 glass = vec3(0.016, 0.017, 0.018);
+    vec3 col = mix(glass + interior, sky(R), 0.18 + 0.62 * fres);
+    col += interior * 0.25;
+
     float fx = min(vUv.x, 1.0 - vUv.x);
-    float frame = 1.0 - smoothstep(0.012, 0.03, fx);
-    frame = max(frame, 1.0 - smoothstep(0.004, 0.012, abs(vUv.y - 0.86)));
+    float frame = 1.0 - smoothstep(0.006, 0.02, fx);
+    frame = max(frame, (1.0 - smoothstep(0.003, 0.008, abs(vUv.y - 0.08))) * (1.0 - lobby));
+    frame = max(frame, (1.0 - smoothstep(0.002, 0.005, abs(fract(vUv.y * 3.0) - 0.0))) * lobby);
 
-    // interior light
-    float on = step(1.0 - uNight * 0.46, vLit);
-    float ceil = mix(0.55, 1.0, smoothstep(0.1, 0.95, vUv.y));
-    float curtain = 0.75 + 0.25 * step(0.5, fract(vSeed * 7.0 + vUv.x * (1.0 + floor(vSeed * 3.0))));
-    vec3 warm = uWarm * mix(0.75, 1.15, vSeed);
-    vec3 interior = warm * on * ceil * curtain * (0.55 + 0.6 * uNight);
-
-    vec3 glass = vec3(0.018, 0.024, 0.026);
-    vec3 refl = sky(R);
-    vec3 col = mix(glass + interior, refl, 0.22 + 0.6 * fres);
-    col += interior * 0.35;
-
-    // apartment status (шахматка)
     if (uChess > 0.001) {
-      vec3 sc = vState < -0.5 ? vec3(0.06) : (vState < 0.5 ? uFree : (vState < 1.5 ? uBooked : uSold));
-      float edge = smoothstep(0.03, 0.08, fx) * smoothstep(0.02, 0.07, min(vUv.y, 1.0 - vUv.y));
-      vec3 cc = sc * mix(0.55, 1.0, edge) * (0.9 + 0.2 * vUv.y);
-      col = mix(col, cc, uChess);
+      vec3 sc = vState < -0.5 ? vec3(0.04) : (vState < 0.5 ? uFree : (vState < 1.5 ? uBooked : uSold));
+      col = mix(col, sc * 0.8, uChess);
     }
-
-    // floor highlight
-    float hi = uHi * (1.0 - step(0.5, abs(vFloor - uHiFloor)));
-    col = mix(col, uLime * (0.65 + 0.35 * vUv.y), hi * 0.85);
-
-    // budget fill
+    // the apartments picked on the laptop glow in their status colour
+    if (uFocusAmt > 0.001 && isFocus > 0.5) {
+      vec3 sc = vState < 0.5 ? uFree : (vState < 1.5 ? uBooked : vec3(1.0, 0.93, 0.82));
+      float pulse = 0.85 + 0.15 * sin(uTime * 2.4 + vApt);
+      col = mix(col, sc * (0.6 + 1.1 * grad) * pulse, uFocusAmt * 0.92);
+    }
+    // budget level
     float below = 1.0 - smoothstep(-0.05, 0.05, vW.y - uFill);
     float surface = 1.0 - smoothstep(0.0, 0.35, abs(vW.y - uFill));
-    col = mix(col, mix(col, uLime * 0.6, 0.65), below * uFillAmt);
-    col += uLime * surface * uFillAmt * 0.9;
+    col = mix(col, mix(col, uLime * 0.55, 0.65), below * uFillAmt);
+    col += uLime * surface * uFillAmt * 1.4;
 
-    col = mix(col, col * 0.4 + vec3(0.02), frame * 0.85);
+    col = mix(col, col * 0.3 + vec3(0.03, 0.025, 0.02), frame * 0.9);
     col *= uDim;
-    gl_FragColor = vec4(col, 1.0);
+    float open = max(openAt(uOpenA), openAt(uOpenB));
+    float alpha = mix(1.0, 0.42, lobby * uLobby) * (1.0 - open);
+    gl_FragColor = vec4(col, alpha);
     #include <colorspace_fragment>
   }
 `;
 
 export function createBuilding() {
+  const M = materials();
   const root = new THREE.Group();
   root.name = 'building';
 
   const buildPlane = new THREE.Plane(new THREE.Vector3(0, -1, 0), 999);
   const ghostPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 999);
-
-  const concrete = new THREE.MeshStandardMaterial({ color: 0xcfcabd, roughness: 0.85, metalness: 0, clippingPlanes: [buildPlane] });
-  const metal = new THREE.MeshStandardMaterial({ color: 0x3a3c34, roughness: 0.5, metalness: 0.45, clippingPlanes: [buildPlane] });
-  const railing = new THREE.MeshBasicMaterial({ color: 0x9db0b4, transparent: true, opacity: 0.14, depthWrite: false, side: THREE.DoubleSide, clippingPlanes: [buildPlane] });
-  const accent = new THREE.MeshBasicMaterial({ color: 0xd6f12b, toneMapped: false, clippingPlanes: [buildPlane] });
+  const clip = [buildPlane];
+  const stone = M.stone.clone(); stone.clippingPlanes = clip;
+  const bronze = M.bronze.clone(); bronze.clippingPlanes = clip;
+  const railGlass = M.railGlass.clone(); railGlass.clippingPlanes = clip; railGlass.side = THREE.FrontSide;
+  const lime = M.lime.clone(); lime.clippingPlanes = clip;
+  const warm = M.warmLight.clone(); warm.clippingPlanes = clip;
 
   const glassUniforms = {
-    uNight: { value: 1 },
-    uChess: { value: 0 },
-    uBuild: { value: 999 },
-    uFill: { value: -10 },
-    uFillAmt: { value: 0 },
-    uHiFloor: { value: -10 },
-    uHi: { value: 0 },
-    uDim: { value: 1 },
-    uTime: { value: 0 },
-    uFree: { value: new THREE.Color(0xc4e62a) },
-    uBooked: { value: new THREE.Color(0xff9a1f) },
-    uSold: { value: new THREE.Color(0x3a3d36) },
-    uLime: { value: new THREE.Color(0xd6f12b) },
-    uWarm: { value: new THREE.Color(0xffc988) },
+    uNight: { value: 1 }, uChess: { value: 0 }, uBuild: { value: 999 }, uFill: { value: -10 }, uFillAmt: { value: 0 },
+    uDim: { value: 1 }, uTime: { value: 0 }, uFocus: { value: new THREE.Vector3(-1, -1, -1) }, uFocusAmt: { value: 0 },
+    uOpenA: { value: new THREE.Vector2(-100, 0) }, uOpenB: { value: new THREE.Vector2(-100, 0) }, uLobby: { value: 1 },
+    uFree: { value: new THREE.Color(0xc4e62a) }, uBooked: { value: new THREE.Color(0xff9a1f) }, uSold: { value: new THREE.Color(0x3a3d36) },
+    uLime: { value: new THREE.Color(0xd6f12b) }, uWarm: { value: new THREE.Color(0xffc483) },
   };
   const glass = new THREE.ShaderMaterial({
-    uniforms: glassUniforms,
-    vertexShader: GLASS_VERT,
-    fragmentShader: GLASS_FRAG,
-    clipping: true,
-    clippingPlanes: [buildPlane],
-    toneMapped: false,
+    uniforms: glassUniforms, vertexShader: GLASS_VERT, fragmentShader: GLASS_FRAG,
+    clipping: true, clippingPlanes: clip, toneMapped: false, transparent: false,
   });
+  // only the lobby (see-through) and the office floor (camera flies in) need blending;
+  // every other floor stays opaque so stacked facades are depth-rejected instead of overdrawn
+  const glassOpen = glass.clone();
+  glassOpen.uniforms = glassUniforms;
+  glassOpen.clippingPlanes = clip;
+  glassOpen.transparent = true;
+  glassOpen.depthWrite = true;
 
-  const floors = [];
-  const ghostSegs = [];
-  const apartments = []; // anchors for labels {floor, side, pos, normal, state}
   const rand = rng(1141);
+  const floors = [];
+  const apartments = [];
+  const ghostSegs = [];
 
   for (const F of FLOORS) {
     const g = new THREE.Group();
     g.position.y = F.y;
     g.userData.baseY = F.y;
-    const solid = [];
-    const dark = [];
-    const rail = [];
-    const glassBuf = new QuadBuffer();
-    const { w, d, h, ox } = F;
-    const finW = F.lobby ? 0.4 : 0.16;
-    const finD = F.lobby ? 0.45 : 0.36;
+    const solid = [], metal = [], rail = [], lights = [];
+    const quads = new Quads();
+    const rr = F.lobby ? LOBBY : MAIN;
+    const panelH = F.h - (F.lobby ? 0 : SLAB);
+    const y0 = F.lobby ? 0 : SLAB;
 
-    // floor slab with a thin shadow gap
-    solid.push(box(w + 0.7, SLAB, d + 0.7, ox, SLAB / 2, 0));
-    if (F.i === 12 || F.i === 13) solid.push(box(w + 0.7, SLAB - 0.04, d + 0.7, ox, h + (SLAB - 0.04) / 2, 0));
+    // slab (balcony) — lobby has none, its floor is the plaza
+    if (!F.lobby) {
+      const pts = outline(MAIN, 180, s => slabOffset(s, F.i));
+      solid.push(slabFromOutline(pts, SLAB, 0));
+      if (F.i <= 12) {
+        rail.push(ribbon(pts, SLAB, 1.05, 0.08));
+        metal.push(ribbon(pts, SLAB + 1.05, 0.05, 0.08));
+      }
+      if (F.i === 1) {
+        // downlights under the canopy
+        for (let k = -3; k <= 3; k++) lights.push(cyl(0.12, 0.12, 0.02, k * 1.6, -0.03, MAIN.B + 2.6, 12));
+      }
+    }
+    if (F.top) {
+      const roof = outline(MAIN, 180, s => slabOffset(s, 14));
+      solid.push(slabFromOutline(roof, SLAB, F.h));
+      // crown: bronze fins rising above the roof, a band, and a lime light line under it
+      const crown = outline(MAIN, 180, () => 0.9);
+      const ch = 3.2;
+      for (let k = 0; k < PANELS; k += 2) {
+        const p = MAIN.at(k * PW);
+        const fin = box(0.12, ch, 0.42);
+        fin.rotateY(Math.atan2(p.nx, p.nz));
+        fin.translate(p.x + p.nx * 0.9, F.h + SLAB + ch / 2, p.z + p.nz * 0.9);
+        metal.push(fin);
+      }
+      metal.push(ribbon(crown, F.h + SLAB + ch - 0.45, 0.45, 0));
+      lights.push(ribbon(crown, F.h + SLAB + ch - 0.55, 0.07, -0.02));
+      solid.push(box(7, 2.4, 5, 4, F.h + SLAB + 1.2, -2));
+    }
 
-    const panelH = h - SLAB;
-    const cy = SLAB + panelH / 2;
-
-    SIDES.forEach((S, si) => {
-      const L = S.long ? w : d;
-      const depth = S.long ? d : w;
-      const n = new THREE.Vector3(...S.n);
-      const r = new THREE.Vector3(...S.r);
-      const up = new THREE.Vector3(0, 1, 0);
-      const bays = F.lobby ? Math.round(L / 3.75) : Math.max(3, Math.round(L / 3));
-      const bw = L / bays;
-      const face = new THREE.Vector3(ox, 0, 0).addScaledVector(n, depth / 2);
-      const aptStates = [];
-      for (let k = 0; k < bays; k++) {
-        const apt = Math.floor(k / 2);
-        if (aptStates[apt] === undefined) {
-          const v = rand();
-          aptStates[apt] = F.lobby ? -1 : v < 0.58 ? 0 : v < 0.75 ? 1 : 2;
-        }
-        const along = -L / 2 + bw * (k + 0.5);
-        const c = face.clone().addScaledVector(r, along).addScaledVector(n, -0.18);
-        c.y = cy;
-        glassBuf.quad(c, r, up, n, bw - finW, panelH, {
-          aState: aptStates[apt],
-          aLit: F.lobby ? 1 : rand(),
-          aSeed: rand(),
-          aFloor: F.i,
+    // glazing + mullions
+    const panels = F.lobby ? 44 : PANELS;
+    const pw = rr.P / panels;
+    const aptStates = [];
+    for (let k = 0; k < panels; k++) {
+      const a = rr.at(k * pw), b = rr.at((k + 1) * pw), m = rr.at((k + 0.5) * pw);
+      const isDoor = F.lobby && Math.abs(m.x) < 2.6 && m.nz > 0.9;
+      const nrm = { x: m.nx, z: m.nz };
+      const apt = F.lobby ? -1 : Math.floor(((k + APT_SHIFT) % PANELS) / APT_PANELS);
+      const id = F.lobby ? -1 : F.i * 100 + apt;
+      if (!F.lobby && aptStates[apt] === undefined) {
+        const v = rand();
+        aptStates[apt] = forced.has(id) ? forced.get(id) : v < 0.56 ? 0 : v < 0.74 ? 1 : 2;
+        const c = MAIN.at(((apt * APT_PANELS - APT_SHIFT + APT_PANELS / 2) % PANELS + PANELS) % PANELS * PW);
+        apartments.push({ id, floor: F.i, apt, state: aptStates[apt], pos: new THREE.Vector3(c.x + c.nx * 0.2, y0 + panelH * 0.55, c.z + c.nz * 0.2), normal: new THREE.Vector3(c.nx, 0, c.nz) });
+      }
+      if (!isDoor) {
+        quads.quad({ x: a.x, z: a.z }, { x: b.x, z: b.z }, y0, y0 + panelH - 0.02, nrm, {
+          aState: F.lobby ? -1 : aptStates[apt], aLit: F.lobby ? 1 : rand(), aSeed: rand(), aFloor: F.i, aApt: id,
         });
-        if (k % 2 === 0 && !F.lobby) {
-          const ac = face.clone().addScaledVector(r, -L / 2 + bw * (k + 1)).addScaledVector(n, 0.4);
-          ac.y = cy; // floor-local; resolved through the floor group's matrix
-          apartments.push({ floor: F.i, side: si, pos: ac, normal: n.clone(), state: aptStates[apt] });
-        }
       }
-      // fins
-      for (let k = 0; k <= bays; k++) {
-        const p = face.clone().addScaledVector(r, -L / 2 + bw * k).addScaledVector(n, finD / 2 - 0.2);
-        const fw = S.long ? finW : finD;
-        const fd = S.long ? finD : finW;
-        dark.push(box(fw, panelH, fd, p.x, cy, p.z));
-      }
-      // balconies on long sides of typical floors
-      if (S.long && !F.lobby && !F.pent) {
-        for (let k = 0; k + 1 < bays; k += 2) {
-          if ((k / 2 + F.i + si) % 2 !== 0) continue;
-          const along = -L / 2 + bw * (k + 1);
-          const bwid = bw * 2 - 0.35;
-          const p = face.clone().addScaledVector(r, along).addScaledVector(n, 0.85);
-          solid.push(box(S.long ? bwid : 1.7, 0.2, S.long ? 1.7 : bwid, p.x, 0.1, p.z));
-          const rp = face.clone().addScaledVector(r, along).addScaledVector(n, 1.66);
-          const railGeo = new THREE.PlaneGeometry(bwid, 1.05);
-          railGeo.lookAt(n);
-          railGeo.translate(rp.x, 0.2 + 0.525, rp.z);
-          rail.push(railGeo);
-          dark.push(box(S.long ? bwid : 0.06, 0.06, S.long ? 0.06 : bwid, rp.x, 1.27, rp.z));
-        }
-      }
-    });
-
-    // terrace railing on the club floor roof
-    if (F.i === 12) {
-      const y = h + 0.3;
-      const e = 0.3;
-      for (const [len, x, z, rot] of [[w + 0.4, 0, d / 2 + e, 0], [w + 0.4, 0, -d / 2 - e, Math.PI], [d + 0.4, w / 2 + e, 0, Math.PI / 2], [d + 0.4, -w / 2 - e, 0, -Math.PI / 2]]) {
-        const rg = new THREE.PlaneGeometry(len, 1.0);
-        rg.rotateY(rot);
-        rg.translate(x, y + 0.5, z);
-        rail.push(rg);
-      }
+      // mullion
+      const mw = F.lobby ? 0.1 : 0.07;
+      const mul = box(mw, panelH, F.lobby ? 0.18 : 0.26, 0, 0, 0);
+      mul.rotateY(Math.atan2(a.nx, a.nz));
+      mul.translate(a.x + a.nx * 0.08, y0 + panelH / 2, a.z + a.nz * 0.08);
+      metal.push(mul);
     }
 
-    // lobby: canopy + accent strip
     if (F.lobby) {
-      solid.push(box(13, 0.36, 4.2, 0, 4.25, d / 2 + 2.1));
-      const strip = new THREE.Mesh(new THREE.BoxGeometry(13, 0.06, 0.06), accent);
-      strip.position.set(0, 4.05, d / 2 + 4.2);
-      g.add(strip);
+      // colonnade on the line of the tower above
+      for (let k = 0; k < 16; k++) {
+        const p = MAIN.at((k / 16) * MAIN.P + MAIN.P / 32);
+        metal.push(cyl(0.3, 0.3, F.h, p.x + p.nx * 0.6, F.h / 2, p.z + p.nz * 0.6, 20));
+        lights.push(cyl(0.34, 0.34, 0.04, p.x + p.nx * 0.6, 0.03, p.z + p.nz * 0.6, 20));
+      }
+      // bronze portal around the entrance
+      const z = LOBBY.B + 0.05;
+      metal.push(box(0.3, 5.2, 0.5, -2.7, 2.6, z), box(0.3, 5.2, 0.5, 2.7, 2.6, z), box(5.7, 0.4, 0.5, 0, 5.2, z));
+      lights.push(box(5.0, 0.05, 0.05, 0, 4.96, z + 0.24));
     }
 
-    // penthouse crown
-    if (F.pent) {
-      const cyTop = h + SLAB;
-      const frameH = 2.6;
-      const cw = w + 2.4, cd = d + 2.4;
-      for (const [x, z] of [[-cw / 2, -cd / 2], [cw / 2, -cd / 2], [cw / 2, cd / 2], [-cw / 2, cd / 2]]) dark.push(box(0.35, frameH, 0.35, ox + x, cyTop + frameH / 2, z));
-      dark.push(box(cw + 0.35, 0.35, 0.35, ox, cyTop + frameH, cd / 2));
-      dark.push(box(cw + 0.35, 0.35, 0.35, ox, cyTop + frameH, -cd / 2));
-      dark.push(box(0.35, 0.35, cd + 0.35, ox + cw / 2, cyTop + frameH, 0));
-      dark.push(box(0.35, 0.35, cd + 0.35, ox - cw / 2, cyTop + frameH, 0));
-      const crown = new THREE.Mesh(mergeGeometries([
-        box(cw, 0.07, 0.07, ox, cyTop + frameH - 0.24, cd / 2 + 0.2),
-        box(cw, 0.07, 0.07, ox, cyTop + frameH - 0.24, -cd / 2 - 0.2),
-        box(0.07, 0.07, cd, ox + cw / 2 + 0.2, cyTop + frameH - 0.24, 0),
-        box(0.07, 0.07, cd, ox - cw / 2 - 0.2, cyTop + frameH - 0.24, 0),
-      ]), accent);
-      g.add(crown);
-      // rooftop plant room
-      solid.push(box(6, 2.2, 4.5, ox + 4, cyTop + 1.1, -1.5));
-    }
-
-    const solidMesh = new THREE.Mesh(mergeGeometries(solid), concrete);
-    const darkMesh = new THREE.Mesh(mergeGeometries(dark), metal);
-    const glassMesh = new THREE.Mesh(glassBuf.geometry(), glass);
-    g.add(glassMesh, darkMesh, solidMesh);
-    if (rail.length) {
-      const railMesh = new THREE.Mesh(mergeGeometries(rail), railing);
-      railMesh.renderOrder = 2;
-      g.add(railMesh);
-    }
+    const add = (geos, mat, order) => {
+      if (!geos.length) return null;
+      const mesh = new THREE.Mesh(mergeSafe(geos), mat);
+      if (order) mesh.renderOrder = order;
+      g.add(mesh);
+      return mesh;
+    };
+    add(solid, stone);
+    add(metal, bronze);
+    add(lights, F.top ? lime : warm);
+    const glassMesh = new THREE.Mesh(quads.geometry(), F.lobby || F.top ? glassOpen : glass);
+    glassMesh.renderOrder = 1;
+    g.add(glassMesh);
+    add(rail, railGlass, 2);
     root.add(g);
     floors.push(g);
 
-    // blueprint ghost: outlines and column lines
-    const y0 = F.y, y1 = F.y + h;
-    const hw = w / 2 + 0.35, hd = d / 2 + 0.35;
-    const rect = yy => [[ox - hw, yy, -hd], [ox + hw, yy, -hd], [ox + hw, yy, -hd], [ox + hw, yy, hd], [ox + hw, yy, hd], [ox - hw, yy, hd], [ox - hw, yy, hd], [ox - hw, yy, -hd]];
-    ghostSegs.push(...rect(y0), ...rect(y0 + SLAB));
-    if (F.i === 12 || F.i === 13) ghostSegs.push(...rect(y1));
-    const stepX = w / Math.max(3, Math.round(w / 3));
-    for (let x = -w / 2; x <= w / 2 + 0.01; x += stepX * 2) {
-      ghostSegs.push([ox + x, y0, hd], [ox + x, y1, hd], [ox + x, y0, -hd], [ox + x, y1, -hd]);
+    // blueprint outline for the construction slide
+    const ring = outline(rr, 72, () => 0);
+    for (const yy of [F.y, F.y + (F.lobby ? 0 : SLAB)]) {
+      for (let k = 0; k < ring.length; k++) {
+        const p = ring[k], q = ring[(k + 1) % ring.length];
+        ghostSegs.push([p.x, yy, p.y], [q.x, yy, q.y]);
+      }
     }
-    for (const z of [-d / 2, 0, d / 2]) ghostSegs.push([ox - hw, y0, z], [ox - hw, y1, z], [ox + hw, y0, z], [ox + hw, y1, z]);
+    for (let k = 0; k < PANELS; k += 4) {
+      const p = rr.at((k / PANELS) * rr.P);
+      ghostSegs.push([p.x, F.y, p.z], [p.x, F.y + F.h, p.z]);
+    }
   }
+
+  // entrance signage on the canopy
+  const sign = createSign('ALA-TOO RESIDENCE');
+  sign.position.set(0, FLOORS[1].y + SLAB + 0.55, MAIN.B + 5.2);
+  root.add(sign);
 
   const ghostGeo = new THREE.BufferGeometry();
   ghostGeo.setAttribute('position', new THREE.Float32BufferAttribute(ghostSegs.flat(), 3));
@@ -370,84 +330,48 @@ export function createBuilding() {
   ghost.renderOrder = 3;
   root.add(ghost);
 
-  const crane = createCrane();
-  crane.position.set(21, -80, -13);
-  root.add(crane);
-
-  const api = {
-    root,
-    floors,
-    apartments,
-    crane,
-    glassUniforms,
-    materials: { concrete, metal, railing, accent, glass, ghostMat },
+  const tmp = new THREE.Vector3();
+  return {
+    root, floors, apartments, glassUniforms,
+    materials: { stone, bronze, glass, ghostMat },
+    aptById: id => apartments.find(a => a.id === id),
+    /** world position of an apartment's facade cell */
+    aptWorld(id, out = tmp) {
+      const a = apartments.find(x => x.id === id);
+      return floors[a.floor].localToWorld(out.copy(a.pos));
+    },
     setBuild(y, glassLag = 0) {
+      // floors entirely above the build line are skipped, not clipped: clipping discards
+      // per fragment, so unbuilt floors would still be rasterised in front of the camera
+      for (const f of floors) f.visible = f.userData.baseY < y;
       buildPlane.constant = y;
       ghostPlane.constant = -y + 0.02;
       glassUniforms.uBuild.value = y - glassLag;
-    },
-    setExplode(e, twist) {
-      for (let i = 0; i < floors.length; i++) {
-        const g = floors[i];
-        const t = i / 13;
-        g.position.y = g.userData.baseY + e * i * 2.6;
-        g.rotation.y = e * twist * Math.sin(i * 1.7) * 0.22;
-        g.position.x = e * Math.sin(i * 2.3) * 1.6;
-        g.position.z = e * Math.cos(i * 1.3) * 1.2 * t;
-      }
+      sign.visible = y > FLOORS[1].y + 1;
     },
     setGhost(o) { ghostMat.opacity = o; ghost.visible = o > 0.001; },
-    setCrane(v, time) {
-      crane.position.y = -80 + 80 * v;
-      crane.visible = v > 0.001;
-      crane.userData.jib.rotation.y = -0.6 + Math.sin(time * 0.12) * 0.5;
-    },
   };
-  return api;
 }
 
-function createCrane() {
-  const g = new THREE.Group();
-  const mat = new THREE.MeshStandardMaterial({ color: 0xd6f12b, roughness: 0.6, metalness: 0.2 });
-  const dark = new THREE.MeshStandardMaterial({ color: 0x2a2d26, roughness: 0.7 });
-  const H = 66;
-  const parts = [];
-  const s = 1.1;
-  for (const [x, z] of [[-s, -s], [s, -s], [s, s], [-s, s]]) parts.push(box(0.16, H, 0.16, x, H / 2, z));
-  for (let y = 1.5; y < H; y += 2.2) {
-    parts.push(box(2.2, 0.1, 0.1, 0, y, s), box(2.2, 0.1, 0.1, 0, y, -s), box(0.1, 0.1, 2.2, s, y, 0), box(0.1, 0.1, 2.2, -s, y, 0));
-  }
-  const mast = new THREE.Mesh(mergeGeometries(parts), mat);
-  g.add(mast);
-  const base = new THREE.Mesh(new THREE.BoxGeometry(5, 1.2, 5), dark);
-  base.position.y = 0.6;
-  g.add(base);
-
-  const jib = new THREE.Group();
-  jib.position.y = H;
-  const jparts = [
-    box(44, 0.18, 0.18, 14, 0.2, 0.7), box(44, 0.18, 0.18, 14, 0.2, -0.7), box(44, 0.18, 0.18, 14, 1.6, 0),
-    box(14, 0.18, 0.18, -11, 0.2, 0.6), box(14, 0.18, 0.18, -11, 0.2, -0.6),
-    box(0.3, 6, 0.3, 0, 3, 0),
-  ];
-  for (let x = -16; x < 36; x += 2.4) jparts.push(box(0.08, 1.6, 0.08, x, 0.9, 0.35));
-  jib.add(new THREE.Mesh(mergeGeometries(jparts), mat));
-  const counter = new THREE.Mesh(new THREE.BoxGeometry(4, 2.4, 2.2), dark);
-  counter.position.set(-15, -0.6, 0);
-  const cab = new THREE.Mesh(new THREE.BoxGeometry(2.2, 2, 2), dark);
-  cab.position.set(1.6, -1.2, 1.4);
-  const trolley = new THREE.Group();
-  trolley.position.set(24, 0, 0);
-  const cableGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, -26, 0)]);
-  trolley.add(new THREE.Line(cableGeo, new THREE.LineBasicMaterial({ color: 0x9a9d92 })));
-  const hook = new THREE.Mesh(new THREE.BoxGeometry(0.8, 1.2, 0.8), dark);
-  hook.position.y = -26.6;
-  trolley.add(hook);
-  const load = new THREE.Mesh(new THREE.BoxGeometry(4.5, 0.6, 1.4), new THREE.MeshStandardMaterial({ color: 0x6f7368, roughness: 0.9 }));
-  load.position.y = -28;
-  trolley.add(load);
-  jib.add(counter, cab, trolley);
-  g.add(jib);
-  g.userData.jib = jib;
-  return g;
+function createSign(text) {
+  const c = document.createElement('canvas');
+  c.width = 2048; c.height = 192;
+  const g = c.getContext('2d');
+  g.clearRect(0, 0, c.width, c.height);
+  g.font = '300 128px "Geologica Variable", "Inter Variable", sans-serif';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  if ('letterSpacing' in g) g.letterSpacing = '38px';
+  const grd = g.createLinearGradient(0, 30, 0, 160);
+  grd.addColorStop(0, '#f6dcae');
+  grd.addColorStop(1, '#b88a52');
+  g.fillStyle = grd;
+  g.fillText(text, c.width / 2, c.height / 2 + 6);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 8;
+  const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, toneMapped: false, color: new THREE.Color(1.7, 1.55, 1.35) });
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(10.5, 0.98), mat);
+  mesh.renderOrder = 4;
+  return mesh;
 }

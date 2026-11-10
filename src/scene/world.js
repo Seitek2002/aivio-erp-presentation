@@ -59,8 +59,14 @@ export function createWorld() {
           float d = length(p);
           vec3 col = vec3(0.034, 0.038, 0.031);
           // paving of the plot
-          float plot = sdBox(p - vec2(0., 4.), vec2(34., 24.));
+          float plot = sdBox(p - vec2(0., 6.), vec2(38., 28.));
           col = mix(col, vec3(0.058, 0.062, 0.054), (1. - smoothstep(0., 0.6, plot)) * uSite);
+          // limestone plaza with a tile joint pattern around the tower and down the entrance
+          float plaza = min(sdBox(p - vec2(0., 2.), vec2(24., 18.)) - 2., sdBox(p - vec2(0., 24.), vec2(4.2, 10.)));
+          float inPlaza = 1. - smoothstep(0., 0.3, plaza);
+          vec2 tq = abs(fract(p / vec2(1.2, 0.6)) - 0.5);
+          float joint = 1. - smoothstep(0.46, 0.49, max(tq.x, tq.y));
+          col = mix(col, vec3(0.16, 0.15, 0.135) * (0.88 + 0.12 * joint), inPlaza * uSite);
           // architectural grid
           float fade = 1. - smoothstep(30., 210., d);
           col += vec3(0.75, 0.8, 0.68) * (gridLine(p, 6., 1.) * 0.05 + gridLine(p, 30., 1.2) * 0.09) * fade * uGrid;
@@ -69,8 +75,11 @@ export function createWorld() {
           float dash = step(0.5, fract((p.x + p.y) * 0.25));
           col += uLime * edge * dash * 0.55 * uSite;
           // contact shadow under the tower
-          float sb = sdBox(p, vec2(15.6, 8.6));
-          col *= mix(0.25, 1., smoothstep(-0.5, 10., sb));
+          float sb = sdBox(p, vec2(12., 6.)) - 6.;
+          col *= mix(0.32, 1., smoothstep(-1., 9., sb));
+          // warm light spilling out of the lobby onto the plaza
+          float spill = 1. - smoothstep(0., 16., max(0., sdBox(p - vec2(0., 2.), vec2(13., 7.)) - 1.));
+          col += vec3(0.55, 0.36, 0.18) * spill * 0.16 * uSite;
           // street lamps glow pools
           col = applyFog(col, vW);
           gl_FragColor = vec4(col, 1.);
@@ -135,15 +144,16 @@ export function createWorld() {
   // ---------- trees ----------
   const treePos = [];
   const tr = mulberry(31);
-  for (let n = 0; n < 60; n++) {
+  for (let n = 0; n < 70; n++) {
     let x, z;
     const edge = Math.floor(tr() * 4);
-    if (edge === 0) { x = -32 + tr() * 64; z = 26 + tr() * 4; }
-    else if (edge === 1) { x = -32 + tr() * 64; z = -18 - tr() * 4; }
-    else if (edge === 2) { x = 30 + tr() * 4; z = -18 + tr() * 44; }
-    else { x = -30 - tr() * 4; z = -18 + tr() * 44; }
-    if (Math.abs(x) < 18 && Math.abs(z) < 11) continue;
-    if (x > 14 && x < 28 && z < -6) continue; // crane spot
+    if (edge === 0) { x = -36 + tr() * 72; z = 32 + tr() * 4; }
+    else if (edge === 1) { x = -36 + tr() * 72; z = -22 - tr() * 4; }
+    else if (edge === 2) { x = 34 + tr() * 4; z = -22 + tr() * 54; }
+    else { x = -34 - tr() * 4; z = -22 + tr() * 54; }
+    if (Math.abs(x) < 20 && Math.abs(z) < 14) continue;
+    if (Math.abs(x) < 16 && z > 12 && z < 36) continue; // entrance plaza and pools
+    if (x > 18 && z < -2) continue; // crane and pallets
     if (x > 18 && z > 0 && z < 18) continue; // site storage
     treePos.push([x, z, 1.0 + tr() * 0.8]);
   }
@@ -172,12 +182,31 @@ export function createWorld() {
   for (let k = 0; k < 4; k++) stackParts.push(boxAt(5.5, 0.35, 1.4, 20.4, 0.2 + k * 0.38, 11 + (k % 2) * 0.2));
   for (let k = 0; k < 3; k++) stackParts.push(boxAt(1.4, 1.1, 1.4, 19.2 + k * 1.7, 0.55, 15.6));
   const stacks = new THREE.Mesh(mergeGeometries(stackParts), new THREE.MeshStandardMaterial({ color: 0x7a7c72, roughness: 0.9 }));
-  group.add(containers, limeCont, stacks);
+  const yard = new THREE.Group();
+  yard.add(containers, limeCont, stacks);
+  group.add(yard);
+
+  // ---------- reflecting pools and bollard lights along the entrance ----------
+  const water = new THREE.MeshStandardMaterial({ color: 0x0b0d0c, roughness: 0.12, metalness: 0.9, envMapIntensity: 0.22 });
+  const rim = new THREE.MeshStandardMaterial({ color: 0xd9d1c1, roughness: 0.45 });
+  for (const sx of [-1, 1]) {
+    const pool = new THREE.Mesh(new THREE.PlaneGeometry(8, 14).rotateX(-Math.PI / 2), water);
+    pool.position.set(sx * 9.5, 0.06, 25);
+    group.add(pool);
+    group.add(new THREE.Mesh(boxAt(8.6, 0.12, 14.6, sx * 9.5, 0.06, 25), rim).translateY(-0.04));
+  }
+  const bollards = [];
+  for (let z = 15; z <= 34; z += 3.8) for (const x of [-4.8, 4.8]) bollards.push(x, 0.9, z);
+  const lampsB = new THREE.Points(new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(bollards, 3)), spriteMaterial(0xffc98c, 1.6, 0.95));
+  group.add(lampsB);
+  const postGeo = [];
+  for (let i = 0; i < bollards.length; i += 3) postGeo.push(boxAt(0.16, 0.85, 0.16, bollards[i], 0.42, bollards[i + 2]));
+  group.add(new THREE.Mesh(mergeGeometries(postGeo), new THREE.MeshStandardMaterial({ color: 0x4a3a2a, roughness: 0.35, metalness: 1 })));
 
   // ---------- lamps + floating dust ----------
   const lampPts = [];
-  for (let x = -30; x <= 30; x += 7.5) lampPts.push(x, 0.6, 31, x, 0.6, -21);
-  for (let z = -14; z <= 24; z += 7.6) lampPts.push(36, 0.6, z, -36, 0.6, z);
+  for (let x = -36; x <= 36; x += 7.2) lampPts.push(x, 0.6, 38, x, 0.6, -27);
+  for (let z = -20; z <= 32; z += 7.4) lampPts.push(41, 0.6, z, -41, 0.6, z);
   const lamps = new THREE.Points(
     new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(lampPts, 3)),
     spriteMaterial(0xffc27a, 2.4, 0.9),
@@ -203,6 +232,7 @@ export function createWorld() {
     groundUniforms,
     city,
     dust: dustPts,
+    yard,
     nodes,
     update(t) {
       dustPts.rotation.y = t * 0.006;
@@ -246,7 +276,7 @@ function createNodes() {
     depthWrite: false,
     toneMapped: false,
     blending: THREE.AdditiveBlending,
-    uniforms: { uTime: { value: 0 }, uShow: { value: 0 }, uColor: { value: new THREE.Color(0xd6f12b) } },
+    uniforms: { uTime: { value: 0 }, uShow: { value: 0 }, uColor: { value: new THREE.Color(0xd6f12b).multiplyScalar(1.15) } },
     vertexShader: `attribute float aT; varying float vT; void main(){ vT = aT; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.); }`,
     fragmentShader: `uniform float uTime; uniform float uShow; uniform vec3 uColor; varying float vT;
       void main(){
@@ -271,7 +301,7 @@ function createNodes() {
     core.position.copy(p).setY(0.2);
     group.add(ring, core);
     rings.push(ring);
-    const start = new THREE.Vector3(Math.cos(a) * 12, 22, Math.sin(a) * 6);
+    const start = new THREE.Vector3(Math.cos(a) * 13, 24, Math.sin(a) * 7);
     const mid = start.clone().lerp(p, 0.5).setY(30);
     const curve = new THREE.QuadraticBezierCurve3(start, mid, p.clone().setY(0.3));
     const pts = curve.getPoints(80);

@@ -1,11 +1,11 @@
 import gsap from 'gsap';
 import { SplitText } from 'gsap/SplitText';
-import { SLIDES } from './slides.js';
+import { SLIDES, OPEN } from './slides.js';
 import { DEFAULT_STATE } from './scene/stage.js';
 
 gsap.registerPlugin(SplitText);
 
-const STATE_KEYS = Object.keys(DEFAULT_STATE).filter(k => k !== 'hiFloor');
+const STATE_KEYS = Object.keys(DEFAULT_STATE);
 
 export function createDeck({ stage, callouts, reduced }) {
   const slides = [...document.querySelectorAll('.slide')];
@@ -71,20 +71,42 @@ export function createDeck({ stage, callouts, reduced }) {
     const sl = SLIDES[i];
     return { ...DEFAULT_STATE, ...sl.state, ...(stage.portrait() ? sl.mobile : null) };
   }
+  /** keyframe j (0 = the slide state itself, 1.. = sl.then[j-1]) */
+  function keyState(i, j) {
+    const base = targetState(i);
+    if (!j) return base;
+    const step = SLIDES[i].then[j - 1];
+    return { ...base, ...step.state, ...(stage.portrait() ? step.mobile : null) };
+  }
 
-  function tweenScene(i, duration) {
-    const t = targetState(i);
-    if (reduced) { t.orbit = 0; t.sway = 0; }
+  /** Camera and scene timeline for a slide, with its follow-up moves and callout cues. */
+  function tweenScene(i, duration, prev, calloutAt) {
     stage.settleOrbit();
-    // shortest way around for the azimuth
-    let d = t.az - stage.state.az;
-    d = ((d + 540) % 360) - 180;
-    t.az = stage.state.az + d;
-    if (t.hi > 0) stage.state.hiFloor = t.hiFloor;
-    const vars = {};
-    for (const k of STATE_KEYS) vars[k] = t[k];
+    stage.setOpen(prev >= 0 && SLIDES[prev].open ? OPEN[SLIDES[prev].open] : null, SLIDES[i].open ? OPEN[SLIDES[i].open] : null);
     sceneTween?.kill();
-    sceneTween = gsap.to(stage.state, { ...vars, duration, ease: 'power2.inOut', overwrite: true });
+    const tl = gsap.timeline();
+    sceneTween = tl;
+    const steps = [0, ...(SLIDES[i].then || []).map((_, j) => j + 1)];
+    let az = stage.state.az;
+    let at = 0;
+    steps.forEach(j => {
+      const t = keyState(i, j);
+      if (reduced) { t.orbit = 0; t.sway = 0; }
+      let d = t.az - az;
+      d = ((d + 540) % 360) - 180;
+      t.az = az + d;
+      az = t.az;
+      const vars = {};
+      for (const k of STATE_KEYS) vars[k] = t[k];
+      const step = j ? SLIDES[i].then[j - 1] : null;
+      const dur = j ? (reduced ? 0.6 : step.dur) : duration;
+      at += j ? (reduced ? 0.2 : step.delay || 0) : 0;
+      tl.to(stage.state, { ...vars, duration: dur, ease: 'power2.inOut', overwrite: j ? false : true }, at);
+      const cue = j ? at + dur - 0.35 : calloutAt;
+      if (callouts.count(i, j)) tl.call(() => callouts.show(i, 0, j), null, Math.max(0, cue));
+      if (j) tl.call(() => callouts.hide(i, j), null, at + 0.05);
+      at += dur;
+    });
   }
 
   // ---------- slide in / out ----------
@@ -135,9 +157,10 @@ export function createDeck({ stage, callouts, reduced }) {
       callouts.hide(prev);
       leave(prev, dir);
     }
-    tweenScene(i, prev < 0 ? 0.01 : reduced ? 0.6 : 1.7);
+    const far = prev >= 0 && (SLIDES[prev].open || SLIDES[i].open) && SLIDES[prev].open !== SLIDES[i].open;
+    const dur = prev < 0 ? 0.01 : reduced ? 0.6 : far ? 2.2 : 1.7;
+    tweenScene(i, dur, prev, prev < 0 ? introDelay + 1.9 : reduced ? 0.6 : dur - 0.25);
     enter(i, dir, prev < 0 ? introDelay : reduced ? 0.2 : 0.55);
-    if (callouts.count(i)) callouts.show(i, prev < 0 ? introDelay + 1.9 : reduced ? 0.6 : 1.45);
     if (i > 0) gsap.to(hint, { autoAlpha: 0, duration: 0.4 });
   }
 
@@ -202,7 +225,7 @@ export function createDeck({ stage, callouts, reduced }) {
     const p = stage.portrait();
     if (p !== wasPortrait && current >= 0) {
       wasPortrait = p;
-      tweenScene(current, 0.6);
+      tweenScene(current, 0.6, current, 0.6);
     }
   });
 

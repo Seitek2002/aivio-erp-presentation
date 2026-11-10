@@ -1,124 +1,148 @@
-import { FLOORS, TOP, floorMid } from './scene/building.js';
+import { TOP, floorTop } from './scene/building.js';
+import { DECK } from './scene/site.js';
 
 /*
-  Each slide = a scene state (tweened as one object) + callouts pinned to the model.
+  Each slide = a scene state (tweened as one object), optional follow-up camera moves (`then`),
+  and callouts pinned to the model.
   Callout anchors:
-    { floor, p:[x,y,z] }  — floor-local point, follows the floor when the tower explodes
-    { world:[x,y,z] }     — fixed world point
-    { apt:{ side, state, near } } — picks a real apartment cell on the facade
-  n: outward normal, used to hide callouts on the far side of the model.
-  side: which way the leader line goes ('l' | 'r'); m:false hides it on phones.
+    { at: 'name', p? }        — an object registered by the interiors (monitors, laptop, seal…)
+    { floor, p:[x,y,z] }      — floor-local point on the tower
+    { world:[x,y,z] }         — fixed world point
+    { aptId }                 — an apartment cell on the facade
+  k: keyframe at which the callout appears (0 = end of the transition), until: keyframe at which it goes.
+  n: outward normal, hides callouts on the far side of the model. m:false hides on phones.
+  open: floor whose glass dissolves while the camera flies through it.
 */
 
-const yTop = i => FLOORS[i].y + FLOORS[i].h;
-const BUILD_11 = yTop(10) + 0.4; // монолит 11 из 14 этажей (лобби — 1-й этаж)
+const OY = floorTop(13);              // office floor surface
+const MID_OFFICE = OY + 1.9;
+const MID_LOBBY = 3.2;
+const BUILD_11 = DECK + 0.02;         // монолит 11 из 14 этажей
+
+export const OPEN = { office: MID_OFFICE, lobby: MID_LOBBY };
 
 export const SLIDES = [
   // 1 — hero
   {
-    state: { az: 30, el: 9, dist: 128, ty: 22, sx: 0.21, sy: 0.17, night: 1, orbit: 2.2 },
-    mobile: { dist: 112, ty: 24 },
+    state: { az: 30, el: 9, dist: 132, ty: 23, sx: 0.21, sy: 0.17, night: 1, orbit: 2.2 },
+    mobile: { dist: 118, ty: 26 },
     callouts: [],
   },
-  // 2 — problem: the tower falls apart into disconnected tools
+  // 2 — problem: inside the developer's office, six screens, six programs
   {
-    state: { az: 48, el: 12, dist: 172, ty: 40, sx: 0.22, sy: 0.16, explode: 1, night: 0.28, dim: 0.85 },
-    mobile: { dist: 150, ty: 44 },
+    open: 'office',
+    state: { az: 26, el: 13, dist: 3.9, tx: 6.05, ty: OY + 1.22, tz: 4.1, fov: 42, sx: 0.17, sy: 0.24, night: 0.9, office: 1, screens: 1, sway: 0.8 },
+    mobile: { dist: 4.6, az: 10, el: 8 },
     callouts: [
-      { floor: 12, p: [-15, 1.6, 8], n: [0, 0, 1], side: 'l', tone: 'warn', title: 'Шахматка в Excel' },
-      { floor: 10, p: [15, 1.6, 0], n: [1, 0, 0], side: 'r', tone: 'warn', title: 'Чаты прорабов' },
-      { floor: 8, p: [-15, 1.6, 8], n: [0, 0, 1], side: 'l', tone: 'warn', title: '1С отдельно от продаж', m: false },
-      { floor: 6, p: [15, 1.6, 0], n: [1, 0, 0], side: 'r', tone: 'warn', title: 'Бумажные акты' },
-      { floor: 3, p: [-15, 1.6, 8], n: [0, 0, 1], side: 'l', tone: 'warn', title: 'Звонки без записи', m: false },
-      { floor: 1, p: [15, 1.6, 0], n: [1, 0, 0], side: 'r', tone: 'warn', title: 'Табель вручную' },
+      { at: 'mon0', side: 'l', tone: 'warn', title: 'Шахматка в таблице' },
+      { at: 'mon1', side: 'r', tone: 'warn', title: 'Чаты прорабов', m: false },
+      { at: 'mon2', side: 'r', tone: 'warn', title: 'Почта и согласования' },
+      { at: 'mon3', side: 'l', tone: 'warn', title: '1С отдельно от продаж', m: false },
+      { at: 'mon4', side: 'r', tone: 'warn', title: 'Акты на бумаге' },
+      { at: 'mon5', side: 'r', tone: 'warn', title: 'Табель вручную' },
     ],
   },
-  // 3 — solution: one system, modules mapped onto the building
+  // 3 — solution: the screens go dark, one laptop opens
   {
-    state: { az: 24, el: 10, dist: 140, ty: 23, sx: 0.1, sy: 0.17, night: 0.85 },
-    mobile: { dist: 122, ty: 25 },
+    open: 'office',
+    state: { az: 44, el: 40, dist: 1.8, tx: 6.0, ty: OY + 0.88, tz: 4.66, fov: 40, sx: 0.16, sy: 0.26, night: 0.9, office: 1, screens: 0, laptop: 1, sway: 0.6 },
+    mobile: { dist: 2.0, az: 42, el: 42 },
     callouts: [
-      { floor: 13, p: [7, 4.4, 6], n: [0.5, 0, 1], side: 'r', title: 'Аналитика', text: 'один экран для руководителя' },
-      { floor: 11, p: [15, 1.6, 4], n: [1, 0, 0], side: 'r', title: 'Продажи и CRM', text: 'воронка, шахматка, ипотека' },
-      { floor: 9, p: [15, 1.6, 4], n: [1, 0, 0], side: 'r', title: 'Документы и ЭДО', text: 'маршруты и подпись ЭЦП', m: false },
-      { floor: 7, p: [15, 1.6, 4], n: [1, 0, 0], side: 'r', title: 'Финансы', text: 'деньги, бюджеты, биллинг' },
-      { floor: 5, p: [15, 1.6, 4], n: [1, 0, 0], side: 'r', title: 'Стройка и снабжение', text: 'графики, акты, склад', m: false },
-      { floor: 3, p: [15, 1.6, 4], n: [1, 0, 0], side: 'r', title: 'Персонал', text: 'табель, СКУД, зарплата' },
-      { floor: 0, p: [6.5, 4.4, 12], n: [0, 0, 1], side: 'r', title: 'Эксплуатация', text: 'приёмка, сервис, приложение' },
+      { at: 'laptop', side: 'r', title: 'Одна система', text: 'продажи, стройка, деньги, люди' },
     ],
   },
-  // 4 — sales: the facade becomes the шахматка
+  // 4 — sales: the laptop flies out and shows the шахматка; picked apartments light up
   {
-    state: { az: 12, el: 7, dist: 116, ty: 26, sx: 0.15, sy: 0.17, chess: 1, night: 0.6, sway: 0.6 },
-    mobile: { dist: 104, ty: 27 },
+    open: 'office',
+    state: { az: 4, el: 4, dist: 150, tx: 14, ty: 30, tz: 6, sx: 0.06, sy: 0.2, night: 0.85, office: 1, laptop: 1, fly: 1, focus: 1, sway: 0.4 },
+    mobile: { dist: 165, tx: 4, ty: 52, el: 6, sy: 0.18 },
     callouts: [
-      { apt: { side: 0, state: 1, near: 13 }, side: 'l', tone: 'amber', title: '№1141, бронь', text: '3-комн., 115,9 м², до 18:00' },
-      { apt: { side: 0, state: 0, near: 10 }, side: 'r', tone: 'lime', title: 'Свободна', text: 'цена с акцией пересчитана', m: false },
-      { apt: { side: 0, state: 2, near: 8 }, side: 'l', tone: 'bone', title: 'Продана', text: 'ДДУ подписан ЭЦП' },
+      { aptId: 1213, side: 'l', tone: 'bone', title: '№1131, продана', text: 'ДДУ подписан ЭЦП' },
+      { aptId: 1100, side: 'l', tone: 'lime', title: '№1122, свободна', text: '1-комн., 50,8 м², 5,5 млн' },
+      { aptId: 1101, side: 'r', tone: 'amber', title: '№1125, бронь', text: 'до 18:00, предоплата по QR', m: false },
     ],
   },
-  // 5 — AI on calls
+  // 5 — AI on calls: the sales office in the lobby
   {
-    state: { az: -24, el: 14, dist: 200, ty: 30, sx: 0.22, sy: 0.3, night: 0.75, dim: 0.45, hiFloor: 1, hi: 0.9 },
-    mobile: { dist: 180, ty: 26, sy: 0.32 },
-    callouts: [],
+    open: 'lobby',
+    state: { az: 22, el: 4, dist: 12.5, tx: -7.4, ty: 3.0, tz: -5.5, fov: 42, sx: 0.12, sy: 0.24, night: 0.9, sales: 1, sway: 0.7 },
+    mobile: { dist: 13, az: 14, el: 6, tx: -7.4 },
+    callouts: [
+      { at: 'wallScore', side: 'r', title: 'Оценка разговора 92 из 100', text: 'итог и следующий шаг готовы' },
+      { at: 'manager', side: 'l', title: 'Звонок записан', text: 'расшифровка по ролям', m: false },
+    ],
   },
-  // 6 — documents
+  // 6 — documents on the meeting table
   {
-    state: { az: -40, el: 6, dist: 150, ty: 18, sx: 0.24, sy: 0.3, night: 0.7, dim: 0.55 },
-    mobile: { dist: 160, ty: 22, sy: 0.32 },
-    callouts: [],
+    open: 'lobby',
+    state: { az: 8, el: 64, dist: 1.0, tx: 7.5, ty: 0.78, tz: 2.24, fov: 38, sx: 0.15, sy: 0.24, night: 0.9, sign: 1, sway: 0.5 },
+    mobile: { dist: 1.15, el: 64 },
+    callouts: [
+      { at: 'seal', side: 'r', title: 'Подписано ЭЦП', text: 'Инфоком, штамп времени' },
+      { at: 'ddu', side: 'l', title: 'ДДУ на согласовании', text: 'юрист, финдиректор, директор', m: false },
+      { at: 'tablet', side: 'r', title: 'Архив и 1С', text: 'выгрузка сразу после подписи' },
+    ],
   },
   // 7 — finance: budget level on the facade
   {
-    state: { az: 30, el: 9, dist: 130, ty: 24, sx: 0.17, sy: 0.17, night: 0.25, fill: TOP * 0.61, fillAmt: 1 },
-    mobile: { dist: 118, ty: 25 },
+    state: { az: 30, el: 9, dist: 134, ty: 25, sx: 0.17, sy: 0.17, night: 0.25, fill: TOP * 0.61, fillAmt: 1 },
+    mobile: { dist: 122, ty: 27 },
     callouts: [
-      { world: [15.6, TOP * 0.61, 8.6], n: [0.7, 0, 0.7], side: 'r', tone: 'lime', title: 'Освоено 61%', text: 'бюджета ЖК на сегодня' },
-      { floor: 13, p: [-13, 4.4, 6], n: [0, 0, 1], side: 'l', title: 'План 1,47 млрд сом', text: 'по десяти статьям', m: false },
+      { world: [16.2, TOP * 0.61, 6], n: [0.8, 0, 0.6], side: 'r', tone: 'lime', title: 'Освоено 61%', text: 'бюджета ЖК на сегодня' },
+      { floor: 13, p: [-6, 4.6, 10.4], n: [0, 0, 1], side: 'l', title: 'План 1,47 млрд сом', text: 'по десяти статьям', m: false },
     ],
   },
-  // 8 — construction: frame at floor 11, glazing behind, crane on site
+  // 8 — construction: the crane delivers, then the camera joins the crew on the deck
   {
-    state: { az: 38, el: 11, dist: 142, ty: 30, sx: 0.18, sy: 0.15, night: 0.12, build: BUILD_11, glassLag: 8.6, ghost: 0.55, crane: 1, sway: 0.5 },
-    mobile: { dist: 134, ty: 30 },
+    state: { az: 36, el: 12, dist: 150, tx: 8, ty: 36, tz: -6, sx: 0.17, sy: 0.15, night: 0.12, build: BUILD_11, glassLag: 5.4, ghost: 0.5, crane: 1, crew: 1, yard: 1, sway: 0.4 },
+    mobile: { dist: 150, ty: 40 },
+    then: [{
+      delay: 0.9, dur: 3.2,
+      state: { az: 48, el: 20, dist: 17, tx: 3.5, ty: DECK + 1.1, tz: 0.5, fov: 40, dim: 0.86 },
+      mobile: { dist: 21, el: 30, tx: 4 },
+    }],
     callouts: [
-      { world: [15.4, BUILD_11, 8.4], n: [0.7, 0, 0.7], side: 'r', tone: 'lime', title: 'Монолит: 11 из 14 этажей', text: 'готовность 68%' },
-      { floor: 8, p: [-15, 1.0, 8], n: [0, 0, 1], side: 'l', title: 'Остекление', text: 'идёт на 9-м этаже', m: false },
-      { floor: 5, p: [15.2, 1.6, -3], n: [1, 0, 0], side: 'r', tone: 'warn', title: 'Дефект на 6-м этаже', text: 'предписание до 10 ноября' },
+      { k: 1, at: 'deckEdge', side: 'r', tone: 'lime', title: 'Монолит: 11 из 14 этажей', text: 'готовность 68%' },
+      { k: 1, at: 'pallet', side: 'r', title: 'Поставка принята', text: 'остаток склада обновлён', m: false },
+      { k: 1, at: 'foreman', side: 'l', title: 'График у прораба', text: 'план и факт по этапам' },
+      { k: 1, at: 'welder', side: 'l', tone: 'warn', title: 'Сварка каркаса 12 этажа', text: 'акт после стройконтроля', m: false },
     ],
   },
-  // 9 — supply and staff, low angle at the entrance
+  // 9 — supply and staff: the site store, then the turnstile at the entrance
   {
-    state: { az: 30, el: 8, dist: 124, ty: 16, sx: 0.14, sy: 0.2, night: 0.8, sway: 0.5 },
-    mobile: { dist: 140, ty: 13, az: 14 },
+    open: 'lobby',
+    state: { az: 68, el: 12, dist: 26, tx: 25.5, ty: 2.6, tz: 10, fov: 38, sx: 0.16, sy: 0.22, night: 0.8, gate: 1, yard: 1, sway: 0.5 },
+    mobile: { dist: 30, el: 14 },
+    then: [{
+      delay: 1.6, dur: 3.2,
+      state: { az: 10, el: 7, dist: 8.5, tx: 0, ty: 1.25, tz: 3.6, fov: 40 },
+      mobile: { dist: 9.5, el: 9 },
+    }],
     callouts: [
-      { world: [0, 2.2, 12.6], n: [0, 0, 1], side: 'l', title: 'Турникет и Face ID', text: 'проход отметился в табеле' },
-      { world: [25.5, 5.2, 7.2], n: [0.6, 0, 0.8], side: 'r', tone: 'warn', title: 'Склад: арматура Ø12', text: 'ниже минимального остатка' },
-      { world: [24.2, 2.8, 14.2], n: [0.6, 0, 0.8], side: 'r', title: 'Поставка бетона М350', text: 'договор создан после тендера', m: false },
+      { k: 0, until: 1, world: [25.5, 5.3, 7.2], side: 'l', tone: 'warn', title: 'Склад: арматура Ø12', text: 'ниже минимального остатка' },
+      { k: 0, until: 1, world: [24.2, 2.8, 14.2], side: 'r', title: 'Поставка бетона М350', text: 'договор создан после тендера', m: false },
+      { k: 1, at: 'faceid', side: 'r', title: 'Face ID: проход 07:48', text: 'отметка сразу в табеле' },
     ],
   },
   // 10 — residents: the house is alive
   {
-    state: { az: -26, el: 9, dist: 132, ty: 22, sx: 0.1, sy: 0.17, night: 1.28, sway: 0.7 },
-    mobile: { dist: 118, ty: 24, dim: 0.75 },
+    state: { az: -26, el: 9, dist: 134, ty: 23, sx: 0.1, sy: 0.17, night: 1.28, sway: 0.7 },
+    mobile: { dist: 122, ty: 26, dim: 0.75 },
     callouts: [
-      { apt: { side: 0, state: 0, near: 3 }, side: 'l', tone: 'lime', title: 'Кв. 1045: ключи выданы', text: 'АПП подписан ЭЦП' },
-      { floor: 0, p: [-15.2, 2.4, 3], n: [-1, 0, 0], side: 'l', title: 'Лифт: заявка в работе', text: 'срок по регламенту 4 часа', m: false },
+      { aptId: 300, side: 'l', tone: 'lime', title: 'Кв. 1045: ключи выданы', text: 'АПП подписан ЭЦП' },
+      { world: [-13.8, 3, 2], n: [-1, 0, 0], side: 'l', title: 'Лифт: заявка в работе', text: 'срок по регламенту 4 часа', m: false },
     ],
   },
   // 11 — management: integrations radiate from the building
   {
-    state: { az: 28, el: 38, dist: 250, ty: 4, sx: 0.16, sy: 0.18, night: 0.9, nodes: 1, orbit: 1.2 },
-    mobile: { dist: 230, ty: 6 },
+    state: { az: 28, el: 38, dist: 255, ty: 4, sx: 0.16, sy: 0.18, night: 0.9, nodes: 1, orbit: 1.2 },
+    mobile: { dist: 235, ty: 6 },
     callouts: 'nodes',
   },
   // 12 — offer
   {
-    state: { az: 210, el: 9, dist: 128, ty: 22, sx: 0.22, sy: 0.17, night: 1, orbit: 2.4 },
-    mobile: { dist: 124, ty: 18, sy: 0.3, dim: 0.42 },
+    state: { az: 210, el: 9, dist: 132, ty: 23, sx: 0.22, sy: 0.17, night: 1, orbit: 2.4 },
+    mobile: { dist: 128, ty: 19, sy: 0.3, dim: 0.42 },
     callouts: [],
   },
 ];
-
-export { floorMid };

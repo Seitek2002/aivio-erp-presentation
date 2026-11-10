@@ -26,8 +26,11 @@ async function boot() {
     '400 16px "Inter Variable"', '500 16px "Inter Variable"',
   ].map(f => document.fonts.load(f, sample).catch(() => {}));
 
-  // 2. product screenshots — fully decoded before they can appear
-  const imgs = [...document.querySelectorAll('.slide img')];
+  // 2. product screenshots — fully decoded before they can appear (DOM cards + 3D screens)
+  const TEX = { dash: 'ui/tex-dash.webp', chess: 'ui/tex-chess.webp', call: 'ui/tex-call.webp', doc: 'ui/ui-doc.webp', ddu: 'ui/tex-ddu.webp', gantt: 'ui/tex-gantt.webp' };
+  const texImages = {};
+  for (const [k, src] of Object.entries(TEX)) { const im = new Image(); im.src = src; texImages[k] = im; }
+  const imgs = [...document.querySelectorAll('.slide img'), ...Object.values(texImages)];
   let loaded = 0;
   const step = () => { loaded++; pre.set(8 + (loaded / imgs.length) * 46, 'Загружаем экраны системы'); };
   const imgJobs = imgs.map(img => {
@@ -41,14 +44,16 @@ async function boot() {
   await nextFrame();
 
   // 3. scene
-  const stage = createStage(document.getElementById('scene'));
-  pre.set(30, 'Собираем 3D-модель жилого комплекса');
   await Promise.all(imgJobs);
+  pre.set(56, 'Собираем 3D-модель жилого комплекса');
+  await nextFrame();
+  const stage = createStage(document.getElementById('scene'), texImages);
+  if (location.search.includes('debug')) window.__stage = stage;
   await nextFrame();
 
   // 4. compile shaders & upload buffers for every slide state, so nothing hitches later
   pre.set(62, 'Готовим сцену');
-  const states = SLIDES.map(s => ({ ...s.state }));
+  const states = SLIDES.flatMap(s => [s.state, ...(s.then || []).map(t => ({ ...s.state, ...t.state }))]);
   await stage.warmup(states);
   pre.set(84);
 
