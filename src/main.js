@@ -6,6 +6,7 @@ import { createPreloader } from './preloader.js';
 import { createStage } from './scene/stage.js';
 import { createCallouts } from './callouts.js';
 import { createDeck } from './deck.js';
+import { createShotFit } from './fit.js';
 import { SLIDES } from './slides.js';
 
 const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -54,6 +55,7 @@ async function boot() {
   // 5. ui
   const callouts = createCallouts(document.getElementById('callouts'), stage);
   const deck = createDeck({ stage, callouts, reduced });
+  createShotFit(); // after titles are split into lines, so copy heights are final
   const frames = async n => { for (let k = 0; k < n; k++) await nextFrame(); };
   await deck.prewarm(frames);
   await callouts.prewarm(frames);
