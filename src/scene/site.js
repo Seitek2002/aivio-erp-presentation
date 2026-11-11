@@ -460,7 +460,7 @@ export function createSite({ images, anchors }) {
       stock.visible = truck.visible = s.yard > 0.001;
       for (const f of flood) f.intensity = 70 * s.crew;
       if (!group.visible) { wasActive = false; arcLight.intensity = 0; return; }
-      if (active && !wasActive) jobT = 0.8;
+      if (active && !wasActive) jobT = 2.6;
       wasActive = active;
       jobT += dt;
       crane.position.y = -80 + 80 * s.crane;

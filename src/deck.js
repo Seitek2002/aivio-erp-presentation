@@ -158,7 +158,7 @@ export function createDeck({ stage, callouts, reduced }) {
       leave(prev, dir);
     }
     const far = prev >= 0 && (SLIDES[prev].open || SLIDES[i].open) && SLIDES[prev].open !== SLIDES[i].open;
-    const dur = prev < 0 ? 0.01 : reduced ? 0.6 : far ? 2.2 : 1.7;
+    const dur = prev < 0 ? 0.01 : reduced ? 0.6 : SLIDES[i].dur || (far ? 2.2 : 1.7);
     tweenScene(i, dur, prev, prev < 0 ? introDelay + 1.9 : reduced ? 0.6 : dur - 0.25);
     enter(i, dir, prev < 0 ? introDelay : reduced ? 0.2 : 0.55);
     if (i > 0) gsap.to(hint, { autoAlpha: 0, duration: 0.4 });

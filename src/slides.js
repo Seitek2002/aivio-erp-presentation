@@ -92,20 +92,16 @@ export const SLIDES = [
       { floor: 13, p: [-6, 4.6, 10.4], n: [0, 0, 1], side: 'l', title: 'План 1,47 млрд сом', text: 'по десяти статьям', m: false },
     ],
   },
-  // 8 — construction: the crane delivers, then the camera joins the crew on the deck
+  // 8 — construction: straight to the crew on the deck (the crane keeps working behind them)
   {
-    state: { az: 36, el: 12, dist: 150, tx: 8, ty: 36, tz: -6, sx: 0.17, sy: 0.15, night: 0.12, build: BUILD_11, glassLag: 5.4, ghost: 0.5, crane: 1, crew: 1, yard: 1, sway: 0.4 },
-    mobile: { dist: 150, ty: 40 },
-    then: [{
-      delay: 0.9, dur: 3.2,
-      state: { az: 48, el: 20, dist: 17, tx: 3.5, ty: DECK + 1.1, tz: 0.5, fov: 40, dim: 0.86 },
-      mobile: { dist: 21, el: 30, tx: 4 },
-    }],
+    dur: 2.3,
+    state: { az: 48, el: 20, dist: 17, tx: 3.5, ty: DECK + 1.1, tz: 0.5, fov: 40, dim: 0.86, sx: 0.17, sy: 0.15, night: 0.12, build: BUILD_11, glassLag: 5.4, ghost: 0.5, crane: 1, crew: 1, yard: 1, sway: 0.4 },
+    mobile: { dist: 21, el: 30, tx: 4 },
     callouts: [
-      { k: 1, at: 'deckEdge', side: 'r', tone: 'lime', title: 'Монолит: 11 из 14 этажей', text: 'готовность 68%' },
-      { k: 1, at: 'pallet', side: 'r', title: 'Поставка принята', text: 'остаток склада обновлён', m: false },
-      { k: 1, at: 'foreman', side: 'l', title: 'График у прораба', text: 'план и факт по этапам' },
-      { k: 1, at: 'welder', side: 'l', tone: 'warn', title: 'Сварка каркаса 12 этажа', text: 'акт после стройконтроля', m: false },
+      { at: 'deckEdge', side: 'r', tone: 'lime', title: 'Монолит: 11 из 14 этажей', text: 'готовность 68%' },
+      { at: 'pallet', side: 'r', title: 'Поставка принята', text: 'остаток склада обновлён', m: false },
+      { at: 'foreman', side: 'l', title: 'График у прораба', text: 'план и факт по этапам' },
+      { at: 'welder', side: 'l', tone: 'warn', title: 'Сварка каркаса 12 этажа', text: 'акт после стройконтроля', m: false },
     ],
   },
   // 9 — supply and staff: the site store, then the turnstile at the entrance
