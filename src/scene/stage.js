@@ -6,6 +6,8 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { FXAAShader } from 'three/addons/shaders/FXAAShader.js';
+import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
+import { SMAAPass } from 'three/addons/postprocessing/SMAAPass.js';
 import { createBuilding, TOP, FOCUS } from './building.js';
 import { createWorld, BG } from './world.js';
 import { createOffice } from './office.js';
@@ -33,7 +35,8 @@ export function createStage(canvas, images) {
   // pixels are large enough to need it.
   const area = window.innerWidth * window.innerHeight;
   const budget = isTouch ? 2.1e6 : 3.0e6;
-  const maxDpr = Math.max(1, Math.min(window.devicePixelRatio || 1, isTouch ? 2 : 1.5, Math.sqrt(budget / area)));
+  // detail pass: render at native density (up to 2x) — optimisation comes later
+  const maxDpr = Math.max(1, Math.min(window.devicePixelRatio || 1, 2));
   let dpr = maxDpr;
   const q = new URLSearchParams(location.search);
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance', stencil: false });
@@ -43,16 +46,18 @@ export function createStage(canvas, images) {
   const dbg = gl.getExtension('WEBGL_debug_renderer_info');
   const gpu = dbg ? String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)) : '';
   const weak = isTouch || /Intel|UHD|Iris|Mali|Adreno|PowerVR|SwiftShader|llvmpipe|Microsoft Basic/i.test(gpu);
-  if (weak && !isTouch) dpr = Math.min(dpr, 1.25);
   // one anti-aliasing path for every device (FXAA below 1.5x density) so the HDR glow looks
   // identical everywhere; ?msaa=4 is kept for comparisons only
   const msaa = q.has('msaa') ? +q.get('msaa') : 0;
-  const useFxaa = q.get('fxaa') !== '0' && msaa === 0 && dpr < 1.5;
+  const useFxaa = q.get('fxaa') === '1';
+  const useSmaa = q.get('smaa') !== '0' && !useFxaa;
   renderer.setClearColor(BG, 1);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.NeutralToneMapping;
   renderer.toneMappingExposure = 1.0;
   renderer.localClippingEnabled = true;
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.setPixelRatio(dpr);
 
   const scene = new THREE.Scene();
@@ -65,7 +70,14 @@ export function createStage(canvas, images) {
   scene.add(new THREE.HemisphereLight(0xb8c4cc, 0x17140f, 0.75));
   const key = new THREE.DirectionalLight(0xffe2bd, 1.6);
   key.position.set(-50, 70, 60);
-  scene.add(key);
+  key.castShadow = true;
+  key.shadow.mapSize.set(4096, 4096);
+  key.shadow.bias = -0.00025;
+  key.shadow.normalBias = 0.04;
+  key.shadow.camera.near = 1;
+  key.shadow.camera.far = 400;
+  scene.add(key, key.target);
+  const KEY_DIR = new THREE.Vector3(-50, 70, 60).normalize();
   const rim = new THREE.DirectionalLight(0x9fb6ff, 0.5);
   rim.position.set(60, 30, -50);
   scene.add(rim);
@@ -74,6 +86,13 @@ export function createStage(canvas, images) {
   officeLight.position.set(6, 50.6, 4.8);
   const lobbyLight = new THREE.PointLight(0xffd2a0, 16, 24, 1.6);
   lobbyLight.position.set(0, 5.4, 1);
+  for (const pl of [officeLight, lobbyLight]) {
+    pl.castShadow = true;
+    pl.shadow.mapSize.set(1024, 1024);
+    pl.shadow.bias = -0.002;
+    pl.shadow.normalBias = 0.02;
+    pl.shadow.camera.near = 0.1;
+  }
   scene.add(officeLight, lobbyLight);
 
   const anchors = new Map();
@@ -87,6 +106,19 @@ export function createStage(canvas, images) {
   scene.add(lobby.group);
   const site = createSite({ images, anchors });
   scene.add(site.group);
+  scene.traverse(o => {
+    if (!(o.isMesh || o.isInstancedMesh)) return;
+    const m = o.material;
+    const custom = m && m.isShaderMaterial;
+    const see = m && (m.transparent || m.opacity < 1 || m.isMeshBasicMaterial);
+    o.castShadow = !custom && !see;
+    o.receiveShadow = !custom && !(m && m.isMeshBasicMaterial);
+  });
+  const catcher = new THREE.Mesh(new THREE.PlaneGeometry(240, 240).rotateX(-Math.PI / 2), new THREE.ShadowMaterial({ opacity: 0.6 }));
+  catcher.position.y = 0.03;
+  catcher.receiveShadow = true;
+  catcher.renderOrder = -4;
+  scene.add(catcher);
   const focusIds = Object.values(FOCUS).map(f => f.floor * 100 + f.apt);
   building.glassUniforms.uFocus.value.set(...focusIds);
 
@@ -100,6 +132,13 @@ export function createStage(canvas, images) {
   const rt = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: msaa });
   const composer = new EffectComposer(renderer, rt);
   composer.addPass(new RenderPass(scene, camera));
+  const gtao = new GTAOPass(scene, camera, 1, 1);
+  gtao.output = GTAOPass.OUTPUT.Default;
+  gtao.blendIntensity = 1.0;
+  gtao.updateGtaoMaterial({ radius: 0.6, distanceExponent: 1.4, thickness: 1.2, scale: 1.25, samples: 16, distanceFallOff: 1 });
+  gtao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 6, rings: 2, samples: 16 });
+  if (q.get('ao') === '0') gtao.enabled = false;
+  composer.addPass(gtao);
   // threshold above 1: only emissive things (lamps, screens, lime lines, lit windows) glow,
   // never a merely well-lit surface
   const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.5, 0.42, 1.05);
@@ -109,6 +148,9 @@ export function createStage(canvas, images) {
   const fxaa = new ShaderPass(FXAAShader);
   fxaa.enabled = useFxaa;
   composer.addPass(fxaa);
+  const smaa = new SMAAPass();
+  smaa.enabled = useSmaa;
+  composer.addPass(smaa);
 
   const state = { ...DEFAULT_STATE };
   const pointer = { x: 0, y: 0, tx: 0, ty: 0 };
@@ -126,6 +168,8 @@ export function createStage(canvas, images) {
     bloom.resolution.set(width * dpr * 0.5, height * dpr * 0.5);
     bloom.setSize(width * dpr * 0.5, height * dpr * 0.5);
     fxaa.material.uniforms.resolution.value.set(1 / (width * dpr), 1 / (height * dpr));
+    gtao.setSize(width * dpr, height * dpr);
+    smaa.setSize(width * dpr, height * dpr);
   }
 
   function resize(force) {
@@ -166,6 +210,13 @@ export function createStage(canvas, images) {
     camera.setViewOffset(width, height, -sx * width, sy * height, width, height);
     camera.updateProjectionMatrix();
 
+    const ext2 = THREE.MathUtils.clamp(dist * 0.6, 3, 90);
+    key.target.position.copy(target);
+    key.position.copy(target).addScaledVector(KEY_DIR, 160);
+    const sc = key.shadow.camera;
+    if (Math.abs(sc.right - ext2) > ext2 * 0.02) { sc.left = -ext2; sc.right = ext2; sc.top = ext2; sc.bottom = -ext2; sc.updateProjectionMatrix(); }
+    gtao.updateGtaoMaterial({ radius: THREE.MathUtils.clamp(dist * 0.035, 0.25, 4) });
+
     building.setBuild(s.build, s.glassLag);
     building.setGhost(s.ghost);
     const u = building.glassUniforms;
@@ -189,12 +240,15 @@ export function createStage(canvas, images) {
     officeLight.intensity = 12 * s.office;
 
     office.update(time, s, portrait(), camera);
-    lobby.update(time, dt, s, camera.position.distanceTo(LOBBY_C) < 42);
+    const nearLobby = camera.position.distanceTo(LOBBY_C) < 42;
+    lobby.update(time, dt, s, nearLobby);
+    lobbyLight.shadow.autoUpdate = nearLobby;
+    officeLight.shadow.autoUpdate = s.office > 0.01;
     site.update(time, dt, s);
   }
 
   // ---------- adaptive quality: bloom off first, then resolution ----------
-  let acc = 0, frames = 0, slow = 0, slowWindows = 0, adaptOff = false;
+  let acc = 0, frames = 0, slow = 0, slowWindows = 0, adaptOff = q.get('adapt') !== '1';
   function adapt(dt) {
     if (adaptOff) return;
     acc += dt; frames++;
@@ -244,7 +298,7 @@ export function createStage(canvas, images) {
   resize(true);
 
   return {
-    renderer, scene, camera, building, world, office, lobby, site, state, anchors, composer, bloom, rt, gpu, weak,
+    renderer, scene, camera, building, world, office, lobby, site, state, anchors, composer, bloom, rt, gpu, weak, gtao,
     lights: { officeLight, lobbyLight, key, rim },
     get dpr() { return dpr; },
     cpu,

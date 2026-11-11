@@ -168,6 +168,86 @@ export function createWorld() {
     trunk.setMatrixAt(i, m);
   });
   group.add(canopy, trunk);
+  // two more canopy layers per tree for a fuller, less faceted crown
+  for (const [dx, dy, dz, k] of [[0.45, 0.55, -0.2, 0.7], [-0.4, 0.35, 0.35, 0.62]]) {
+    const layer = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 2), new THREE.MeshStandardMaterial({ color: 0x33402c, roughness: 1 }), treePos.length);
+    treePos.forEach(([x, z, sc], i) => {
+      m.compose(new THREE.Vector3(x + dx * sc, 2.2 + sc + dy * sc, z + dz * sc), new THREE.Quaternion(), new THREE.Vector3(sc * k, sc * k * 1.1, sc * k));
+      layer.setMatrixAt(i, m);
+    });
+    group.add(layer);
+  }
+
+  // ---------- streets, curbs, street lights and cars ----------
+  const bxS = (w, h, d, x, y, z) => { const g = new THREE.BoxGeometry(w, h, d); g.translate(x, y, z); return g; };
+  const asphalt = new THREE.MeshStandardMaterial({ color: 0x17181a, roughness: 0.85 });
+  const curbM = new THREE.MeshStandardMaterial({ color: 0x8e8a82, roughness: 0.8 });
+  const paintM = new THREE.MeshStandardMaterial({ color: 0xd8d6cf, roughness: 0.6 });
+  const streets = [[0, 46, 220, 10], [0, -36, 220, 9]];
+  const streetsZ = [[-52, 5, 9, 160], [52, 5, 9, 160]];
+  const sk = [];
+  for (const [x, z, w, d] of [...streets, ...streetsZ]) {
+    const road = new THREE.Mesh(new THREE.PlaneGeometry(w, d).rotateX(-Math.PI / 2), asphalt);
+    road.position.set(x, 0.035, z);
+    group.add(road);
+  }
+  for (const [, z] of streets) {
+    for (let x = -105; x < 105; x += 6) sk.push(bxS(3, 0.02, 0.18, x, 0.05, z));
+    sk.push(bxS(220, 0.18, 0.3, 0, 0.09, z - 5.15), bxS(220, 0.18, 0.3, 0, 0.09, z + 5.15));
+  }
+  group.add(new THREE.Mesh(mergeGeometries(sk.slice(0, -4)), paintM));
+  group.add(new THREE.Mesh(mergeGeometries(sk.slice(-4)), curbM));
+  // street lights along the front street
+  const poleParts = [], heads = [], pools = [];
+  for (let x = -60; x <= 60; x += 15) for (const side of [-1, 1]) {
+    const z = 46 + side * 5.6;
+    poleParts.push(bxS(0.14, 7, 0.14, x, 3.5, z), bxS(0.1, 0.1, 1.6, x, 7, z - side * 0.75));
+    heads.push(bxS(0.5, 0.12, 0.28, x, 6.92, z - side * 1.5));
+    pools.push(x, 0.12, z - side * 1.6);
+  }
+  group.add(new THREE.Mesh(mergeGeometries(poleParts), new THREE.MeshStandardMaterial({ color: 0x2a2a2c, roughness: 0.4, metalness: 0.8 })));
+  group.add(new THREE.Mesh(mergeGeometries(heads), new THREE.MeshBasicMaterial({ color: new THREE.Color(1, 0.88, 0.7).multiplyScalar(4), toneMapped: false })));
+  const poolPts = new THREE.Points(new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(pools, 3)), spriteMaterial(0xffc98c, 9, 0.35));
+  group.add(poolPts);
+  // cars
+  const cars = [];
+  const carColors = [0xf1f0ec, 0x16171a, 0x5e646b, 0xa9adb1, 0x1e2a44, 0x6b1f22, 0x2f3a2f];
+  const cr = mulberry(55);
+  const carShape = new THREE.Shape([[-2.25, 0.32], [2.25, 0.32], [2.32, 0.72], [1.95, 0.86], [1.05, 0.92], [0.5, 1.4], [-0.95, 1.44], [-1.75, 1.02], [-2.28, 0.92], [-2.32, 0.55]].map(([a, b]) => new THREE.Vector2(a, b)));
+  const cabinShape = new THREE.Shape([[0.95, 0.9], [0.47, 1.36], [-0.92, 1.4], [-1.65, 1.0]].map(([a, b]) => new THREE.Vector2(a, b)));
+  const bodyGeo = new THREE.ExtrudeGeometry(carShape, { depth: 1.72, bevelEnabled: true, bevelThickness: 0.08, bevelSize: 0.06, bevelSegments: 3, curveSegments: 4 });
+  bodyGeo.translate(0, 0, -0.86);
+  const glassGeo = new THREE.ExtrudeGeometry(cabinShape, { depth: 1.82, bevelEnabled: false });
+  glassGeo.translate(0, 0, -0.91);
+  const carGlass = new THREE.MeshStandardMaterial({ color: 0x0c1014, roughness: 0.05, metalness: 0.9, envMapIntensity: 1.5 });
+  const tyre = new THREE.MeshStandardMaterial({ color: 0x101010, roughness: 0.9 });
+  const wheelRim = new THREE.MeshStandardMaterial({ color: 0xb8bcc0, roughness: 0.25, metalness: 1 });
+  const headL = new THREE.MeshBasicMaterial({ color: new THREE.Color(1, 0.96, 0.88).multiplyScalar(5), toneMapped: false });
+  const tailL = new THREE.MeshBasicMaterial({ color: new THREE.Color(1, 0.05, 0.03).multiplyScalar(3.5), toneMapped: false });
+  for (let i = 0; i < 16; i++) {
+    const car = new THREE.Group();
+    const paintC = new THREE.MeshStandardMaterial({ color: carColors[Math.floor(cr() * carColors.length)], roughness: 0.22, metalness: 0.6, envMapIntensity: 1.4 });
+    car.add(new THREE.Mesh(bodyGeo, paintC), new THREE.Mesh(glassGeo, carGlass));
+    for (const [x, z] of [[1.4, 0.9], [-1.45, 0.9], [1.4, -0.9], [-1.45, -0.9]]) {
+      const w = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.34, 0.24, 20).rotateX(Math.PI / 2), tyre);
+      w.position.set(x, 0.34, z); car.add(w);
+      const h = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.25, 12).rotateX(Math.PI / 2), wheelRim);
+      h.position.set(x, 0.34, z); car.add(h);
+    }
+    for (const z of [-0.6, 0.6]) {
+      const hl = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.1, 0.32), headL); hl.position.set(2.33, 0.68, z); car.add(hl);
+      const tl = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.1, 0.34), tailL); tl.position.set(-2.34, 0.8, z); car.add(tl);
+    }
+    const moving = i < 6;
+    const lane = moving ? (i % 2 ? 43.6 : 48.4) : (i % 2 ? 40.8 : 51.2);
+    const dir = moving ? (i % 2 ? 1 : -1) : 1;
+    car.position.set(-100 + cr() * 200, 0, lane);
+    car.rotation.y = dir > 0 ? 0 : Math.PI;
+    car.scale.setScalar(0.95 + cr() * 0.1);
+    car.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+    group.add(car);
+    cars.push({ car, moving, dir, speed: 7 + cr() * 5 });
+  }
 
   // ---------- site storage: containers and material stacks ----------
   const boxAt = (w, h, d, x, y, z, ry = 0) => { const g = new THREE.BoxGeometry(w, h, d); g.rotateY(ry); g.translate(x, y, z); return g; };
@@ -238,6 +318,12 @@ export function createWorld() {
       dustPts.rotation.y = t * 0.006;
       dustPts.position.y = Math.sin(t * 0.2) * 0.6;
       nodes.update(t);
+      for (const c of cars) {
+        if (!c.moving) continue;
+        let x = c.car.position.x + c.dir * c.speed * (1 / 60);
+        if (x > 110) x = -110; if (x < -110) x = 110;
+        c.car.position.x = x;
+      }
     },
   };
 }

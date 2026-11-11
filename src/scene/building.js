@@ -74,16 +74,16 @@ class Quads {
 }
 
 const GLASS_VERT = /* glsl */ `
-  attribute float aState; attribute float aLit; attribute float aSeed; attribute float aFloor; attribute float aApt;
+  attribute float aState; attribute float aLit; attribute float aSeed; attribute float aFloor; attribute float aApt; attribute float aSub;
   varying vec2 vUv; varying vec3 vW; varying vec3 vN;
-  varying float vState; varying float vLit; varying float vSeed; varying float vFloor; varying float vApt;
+  varying float vState; varying float vLit; varying float vSeed; varying float vFloor; varying float vApt; varying float vSub;
   #include <clipping_planes_pars_vertex>
   void main() {
     vUv = uv;
     vec4 wp = modelMatrix * vec4(position, 1.0);
     vW = wp.xyz;
     vN = normalize(mat3(modelMatrix) * normal);
-    vState = aState; vLit = aLit; vSeed = aSeed; vFloor = aFloor; vApt = aApt;
+    vState = aState; vLit = aLit; vSeed = aSeed; vFloor = aFloor; vApt = aApt; vSub = aSub;
     vec4 mvPosition = viewMatrix * wp;
     gl_Position = projectionMatrix * mvPosition;
     #include <clipping_planes_vertex>
@@ -95,8 +95,9 @@ const GLASS_FRAG = /* glsl */ `
   uniform vec3 uFocus;
   uniform vec2 uOpenA, uOpenB;
   uniform vec3 uFree, uBooked, uSold, uLime, uWarm;
+  uniform float uPW, uRoomH;
   varying vec2 vUv; varying vec3 vW; varying vec3 vN;
-  varying float vState; varying float vLit; varying float vSeed; varying float vFloor; varying float vApt;
+  varying float vState; varying float vLit; varying float vSeed; varying float vFloor; varying float vApt; varying float vSub;
   #include <clipping_planes_pars_fragment>
 
   vec3 sky(vec3 r) {
@@ -132,9 +133,51 @@ const GLASS_FRAG = /* glsl */ `
     vec3 interior = warm * on * (grad * curtain * 0.55 + cove * 1.6) * mix(0.8, 1.2, vSeed);
     interior *= mix(1.0, 1.45, lobby);
 
+    // interior mapping: a ray-traced room (walls, floor, ceiling lamp, sofa, picture) behind the glass
+    vec3 room = vec3(0.0);
+    if (lobby < 0.5) {
+      vec3 Rt = normalize(cross(vec3(0.0, 1.0, 0.0), N));
+      vec3 vd = normalize(vW - cameraPosition);
+      vec3 rd = vec3(dot(vd, Rt), vd.y, max(dot(vd, -N), 0.04));
+      vec3 sz = vec3(uPW * 4.0, uRoomH, 5.5);
+      vec3 p0 = vec3((vSub + vUv.x) * uPW, vUv.y * uRoomH, 0.0);
+      vec3 tv = vec3(rd.x > 0.0 ? (sz.x - p0.x) / rd.x : -p0.x / min(rd.x, -1e-4),
+                     rd.y > 0.0 ? (sz.y - p0.y) / rd.y : -p0.y / min(rd.y, -1e-4),
+                     sz.z / rd.z);
+      float t = min(tv.x, min(tv.y, tv.z));
+      vec3 h = p0 + rd * t;
+      vec3 wallC = mix(vec3(0.80, 0.72, 0.62), vec3(0.60, 0.65, 0.63), step(0.62, vSeed));
+      wallC = mix(wallC, vec3(0.42, 0.36, 0.33), step(0.86, vSeed));
+      vec3 c = wallC * 0.85;
+      if (t == tv.z) {
+        c = wallC;
+        float sofa = step(h.y, 0.8) * step(sz.x * 0.22, h.x) * step(h.x, sz.x * 0.72);
+        c = mix(c, mix(vec3(0.22, 0.2, 0.19), vec3(0.45, 0.38, 0.3), fract(vSeed * 13.0)), sofa);
+        float pic = step(1.35, h.y) * step(h.y, 2.05) * step(sz.x * 0.38, h.x) * step(h.x, sz.x * 0.62);
+        c = mix(c, vec3(0.12, 0.16, 0.2) + vec3(0.25, 0.15, 0.05) * fract(vSeed * 7.0), pic);
+        float door = step(h.y, 2.1) * step(sz.x * 0.84, h.x) * step(h.x, sz.x * 0.97);
+        c = mix(c, c * 0.6, door);
+      } else if (t == tv.y) {
+        c = rd.y < 0.0 ? vec3(0.34, 0.23, 0.15) * (0.85 + 0.15 * step(0.5, fract(h.x * 1.2))) : vec3(0.9, 0.87, 0.8);
+      } else {
+        float shelf = step(0.9, h.y) * step(h.y, 2.0) * step(1.2, h.z) * step(h.z, 3.4);
+        c = mix(c, vec3(0.3, 0.22, 0.16), shelf * step(0.5, vSeed));
+      }
+      float lampD = length(h.xz - vec2(sz.x * 0.5, sz.z * 0.5));
+      float light = (0.3 + 1.2 * exp(-lampD * 0.32)) * (0.55 + 0.45 * h.y / sz.y);
+      vec3 roomLit = c * warm * light * (0.85 + 0.45 * uNight);
+      if (t == tv.y && rd.y > 0.0) roomLit += warm * exp(-lampD * 1.4) * 2.4;
+      vec3 roomDark = c * vec3(0.018, 0.022, 0.028) * (1.0 + 0.5 * vUv.y);
+      room = mix(roomDark, roomLit, on);
+      // sheer curtains gathered at the sides of each window
+      float drape = smoothstep(0.82, 1.0, abs(vUv.x * 2.0 - 1.0)) * (0.7 + 0.3 * sin(vUv.x * 90.0));
+      room = mix(room, vec3(0.86, 0.8, 0.7) * mix(0.06, 0.9, on) * grad, drape * 0.75);
+    }
+
     vec3 glass = vec3(0.016, 0.017, 0.018);
-    vec3 col = mix(glass + interior, sky(R), 0.18 + 0.62 * fres);
-    col += interior * 0.25;
+    vec3 inner = lobby > 0.5 ? interior : room + interior * 0.12;
+    vec3 col = mix(glass + inner, sky(R), 0.14 + 0.6 * fres);
+    col += inner * 0.2;
 
     float fx = min(vUv.x, 1.0 - vUv.x);
     float frame = 1.0 - smoothstep(0.006, 0.02, fx);
@@ -179,6 +222,7 @@ export function createBuilding() {
   const railGlass = M.railGlass.clone(); railGlass.clippingPlanes = clip; railGlass.side = THREE.FrontSide;
   const lime = M.lime.clone(); lime.clippingPlanes = clip;
   const warm = M.warmLight.clone(); warm.clippingPlanes = clip;
+  const leafB = M.leaf.clone(); leafB.clippingPlanes = clip;
 
   const glassUniforms = {
     uNight: { value: 1 }, uChess: { value: 0 }, uBuild: { value: 999 }, uFill: { value: -10 }, uFillAmt: { value: 0 },
@@ -186,6 +230,7 @@ export function createBuilding() {
     uOpenA: { value: new THREE.Vector2(-100, 0) }, uOpenB: { value: new THREE.Vector2(-100, 0) }, uLobby: { value: 1 },
     uFree: { value: new THREE.Color(0xc4e62a) }, uBooked: { value: new THREE.Color(0xff9a1f) }, uSold: { value: new THREE.Color(0x3a3d36) },
     uLime: { value: new THREE.Color(0xd6f12b) }, uWarm: { value: new THREE.Color(0xffc483) },
+    uPW: { value: PW }, uRoomH: { value: FLOORS[1].h - SLAB },
   };
   const glass = new THREE.ShaderMaterial({
     uniforms: glassUniforms, vertexShader: GLASS_VERT, fragmentShader: GLASS_FRAG,
@@ -208,7 +253,7 @@ export function createBuilding() {
     const g = new THREE.Group();
     g.position.y = F.y;
     g.userData.baseY = F.y;
-    const solid = [], metal = [], rail = [], lights = [];
+    const solid = [], metal = [], rail = [], lights = [], green = [];
     const quads = new Quads();
     const rr = F.lobby ? LOBBY : MAIN;
     const panelH = F.h - (F.lobby ? 0 : SLAB);
@@ -221,6 +266,36 @@ export function createBuilding() {
       if (F.i <= 12) {
         rail.push(ribbon(pts, SLAB, 1.05, 0.08));
         metal.push(ribbon(pts, SLAB + 1.05, 0.05, 0.08));
+      }
+      // downlights in the soffit of this slab (they light the balcony below)
+      if (F.i >= 2) {
+        for (let k = 0; k < 180; k += 6) {
+          const s0 = (k / 180) * MAIN.P;
+          const p = MAIN.at(s0), d = slabOffset(s0, F.i) - 0.45;
+          const disc = new THREE.CircleGeometry(0.075, 12);
+          disc.rotateX(Math.PI / 2);
+          disc.translate(p.x + p.nx * d, -0.004, p.z + p.nz * d);
+          lights.push(disc);
+        }
+      }
+      // planters with shrubs on the wide parts of the balcony
+      if (F.i <= 12) {
+        for (let k = 3; k < 180; k += 11) {
+          const s0 = (k / 180) * MAIN.P;
+          const d = slabOffset(s0, F.i);
+          if (d < 1.7) continue;
+          const p = MAIN.at(s0);
+          const x = p.x + p.nx * (d - 0.55), z = p.z + p.nz * (d - 0.55);
+          const pl = box(0.85, 0.38, 0.38);
+          pl.rotateY(Math.atan2(p.nx, p.nz));
+          pl.translate(x, SLAB + 0.19, z);
+          solid.push(pl);
+          for (let b = 0; b < 3; b++) {
+            const bush = new THREE.IcosahedronGeometry(0.2 + rand() * 0.08, 1);
+            bush.translate(x + (b - 1) * 0.26 * p.nz, SLAB + 0.5 + rand() * 0.1, z - (b - 1) * 0.26 * p.nx);
+            green.push(bush);
+          }
+        }
       }
       if (F.i === 1) {
         // downlights under the canopy
@@ -248,7 +323,7 @@ export function createBuilding() {
     // glazing + mullions
     const panels = F.lobby ? 44 : PANELS;
     const pw = rr.P / panels;
-    const aptStates = [];
+    const aptStates = [], aptLit = [], aptSeed = [];
     for (let k = 0; k < panels; k++) {
       const a = rr.at(k * pw), b = rr.at((k + 1) * pw), m = rr.at((k + 0.5) * pw);
       const isDoor = F.lobby && Math.abs(m.x) < 2.6 && m.nz > 0.9;
@@ -258,12 +333,13 @@ export function createBuilding() {
       if (!F.lobby && aptStates[apt] === undefined) {
         const v = rand();
         aptStates[apt] = forced.has(id) ? forced.get(id) : v < 0.56 ? 0 : v < 0.74 ? 1 : 2;
+        aptLit[apt] = rand(); aptSeed[apt] = rand();
         const c = MAIN.at(((apt * APT_PANELS - APT_SHIFT + APT_PANELS / 2) % PANELS + PANELS) % PANELS * PW);
         apartments.push({ id, floor: F.i, apt, state: aptStates[apt], pos: new THREE.Vector3(c.x + c.nx * 0.2, y0 + panelH * 0.55, c.z + c.nz * 0.2), normal: new THREE.Vector3(c.nx, 0, c.nz) });
       }
       if (!isDoor) {
         quads.quad({ x: a.x, z: a.z }, { x: b.x, z: b.z }, y0, y0 + panelH - 0.02, nrm, {
-          aState: F.lobby ? -1 : aptStates[apt], aLit: F.lobby ? 1 : rand(), aSeed: rand(), aFloor: F.i, aApt: id,
+          aState: F.lobby ? -1 : aptStates[apt], aLit: F.lobby ? 1 : aptLit[apt], aSeed: F.lobby ? rand() : aptSeed[apt], aFloor: F.i, aApt: id, aSub: F.lobby ? 0 : ((k + APT_SHIFT) % PANELS) % APT_PANELS,
         });
       }
       // mullion
@@ -295,6 +371,7 @@ export function createBuilding() {
       return mesh;
     };
     add(solid, stone);
+    add(green, leafB);
     add(metal, bronze);
     add(lights, F.top ? lime : warm);
     const glassMesh = new THREE.Mesh(quads.geometry(), F.lobby || F.top ? glassOpen : glass);

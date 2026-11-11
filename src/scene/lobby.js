@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { LOBBY, FLOORS } from './building.js';
 import { materials, imageTexture } from './materials.js';
 import { appTexture } from './screens.js';
-import { desk, meetingChair, monitor, plant, wallScreen, chandelier, paperSheet, pen, cup, tablet, turnstiles, faceTexture, Kit } from './props.js';
+import { desk, meetingChair, monitor, plant, wallScreen, chandelier, paperSheet, pen, cup, tablet, turnstiles, faceTexture, Kit, keyboard, mouse, deskLamp, folderStack, swivelChair, vaseFlowers, sofa, pendant } from './props.js';
 import { person, sit, talking, walking } from './people.js';
 import { box, cyl, outline, smooth, lerp } from './geo.js';
 
@@ -53,9 +53,21 @@ export function createLobby({ images, anchors }) {
   sign.position.set(0, 3.9, -6.82);
   shellGroup.add(sign);
 
-  const receptionist = person({});
+  const receptionist = person({ outfit: 'suit', female: true, hair: 'bun', seed: 21 });
   receptionist.root.position.set(0, 0, -2.6);
   group.add(receptionist.root);
+
+  // reception details and a lounge by the window
+  const vf = vaseFlowers(9); vf.position.set(-1.3, 1.145, 0.5); group.add(vf);
+  const recMon = new THREE.Group();
+  recMon.add(new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.32, 0.02), M.blackSteel));
+  recMon.position.set(0.45, 1.36, -0.6); recMon.rotation.y = Math.PI;
+  group.add(recMon);
+  const lounge = sofa(2.6); lounge.position.set(10.2, 0, -5.3); group.add(lounge);
+  const ct = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 0.04, 32), M.stone); ct.position.set(10.2, 0.42, -4.0); group.add(ct);
+  const ctLeg = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.1, 0.4, 12), M.bronze); ctLeg.position.set(10.2, 0.2, -4.0); group.add(ctLeg);
+  const vf2 = vaseFlowers(12); vf2.position.set(10.3, 0.44, -4.0); group.add(vf2);
+  for (const [x, z] of [[-10.4, -0.6], [-7.4, -0.6], [-4.4, -0.6]]) { const pd = pendant(2.2); pd.position.set(x, H - 0.05, z); shellGroup.add(pd); }
 
   // ---------- sales office ----------
   const call = imageTexture(images.call);
@@ -81,12 +93,16 @@ export function createLobby({ images, anchors }) {
     // monitor faces the manager who sits on the +z side looking at -z: turn the screen to +z
     m.group.rotation.y = 0;
     group.add(m.group);
-    const p = person({ headset: true, dark: i % 3 === 1 });
+    const p = person({ outfit: 'office', headset: true, seed: 10 + i });
     sit(p, 0.48);
     p.root.position.set(x, 0, z + 0.78);
     p.root.rotation.y = Math.PI;
     group.add(p.root);
-    const chair = meetingChair();
+    const kb = keyboard(); kb.position.set(x - 0.05, 0.773, z + 0.12); group.add(kb);
+    const ms = mouse(); ms.position.set(x + 0.33, 0.773, z + 0.16); group.add(ms);
+    const fs2 = folderStack(2 + (i % 3), 20 + i); fs2.position.set(x - 0.6, 0.773, z + 0.08); group.add(fs2);
+    if (i % 2 === 0) { const lp = deskLamp(); lp.position.set(x + 0.62, 0.773, z - 0.18); lp.rotation.y = -2.2; group.add(lp); }
+    const chair = swivelChair([0x2b2b2d, 0x3b3f46, 0x6b5a48][i % 3]);
     chair.position.set(x, 0, z + 0.8);
     chair.rotation.y = Math.PI;
     group.add(chair);
@@ -172,7 +188,7 @@ export function createLobby({ images, anchors }) {
   group.add(ts.group);
   ts.terms.forEach(tm => { tm.mat.uniforms.uMapB.value = faceOk; });
   anchors.set('faceid', ts.terms[1].screen);
-  const walker = person({ dark: true });
+  const walker = person({ outfit: 'casual', seed: 5, female: false });
   group.add(walker.root);
   const walkerAnchor = new THREE.Object3D(); walkerAnchor.position.set(0, 0.25, 0); walker.neck.add(walkerAnchor);
   anchors.set('walker', walkerAnchor);

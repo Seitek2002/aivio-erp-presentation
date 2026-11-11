@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { FLOORS, floorTop, FOCUS } from './building.js';
 import { materials, imageTexture } from './materials.js';
 import { appTexture, highlightTexture } from './screens.js';
-import { desk, execChair, monitor, laptop, plant, floorLamp, sofa, shelfWall, artwork, Kit } from './props.js';
+import { desk, execChair, monitor, laptop, plant, floorLamp, sofa, shelfWall, artwork, Kit, keyboard, mouse, deskLamp, deskPhone, penCup, folderStack, pendant, vaseFlowers, cup } from './props.js';
 import { person, sit } from './people.js';
 import { box, smooth, lerp } from './geo.js';
 
@@ -56,6 +56,18 @@ export function createOffice({ building, images, anchors }) {
   chair.rotation.y = Math.PI;
   group.add(chair);
 
+  // desk details
+  const TOPY = 0.773;
+  const place = (obj, x, z, ry = 0, y = TOPY) => { obj.position.set(x, y, z); obj.rotation.y = ry; group.add(obj); return obj; };
+  place(keyboard(), DESK.x - 0.78, DESK.z + 0.42, 0.12);
+  place(mouse(), DESK.x - 0.4, DESK.z + 0.46, 0.1);
+  place(deskLamp(), DESK.x + 1.2, DESK.z - 0.3, -2.4);
+  place(deskPhone(), DESK.x + 1.05, DESK.z + 0.28, -0.4);
+  place(penCup(), DESK.x - 1.18, DESK.z - 0.28);
+  place(folderStack(4, 7), DESK.x - 1.1, DESK.z + 0.22, 0.25);
+  place(cup(), DESK.x + 0.75, DESK.z + 0.45);
+  for (const x of [-0.8, 0, 0.8]) place(pendant(1.45), DESK.x + x, DESK.z, 0, H - 0.02);
+  place(vaseFlowers(6), 11.6, 1.5, 0, 0.44);
   const lounge = sofa(2.4);
   lounge.position.set(11.6, 0, 0.2);
   group.add(lounge);
@@ -100,7 +112,7 @@ export function createOffice({ building, images, anchors }) {
   });
 
   // ---------- CEO ----------
-  const ceo = person({ dark: false });
+  const ceo = person({ outfit: 'suit', seed: 3, hair: 'short', female: false, grip: 0.25 });
   sit(ceo, 0.5);
   ceo.root.position.set(DESK.x, 0, DESK.z + 1.2);
   ceo.root.rotation.y = Math.PI;

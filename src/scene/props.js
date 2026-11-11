@@ -323,3 +323,122 @@ export function faceTexture(state) {
   t.colorSpace = THREE.SRGBColorSpace;
   return t;
 }
+
+// ---------------- desk details (detail pass) ----------------
+
+export function keyboard(w = 0.44, d = 0.14) {
+  const M = materials();
+  const k = new Kit();
+  k.add(M.steel, box(w, 0.012, d, 0, 0.006, 0));
+  const keyMat = M.blackSteel;
+  const cols = 15, rows = 5;
+  const kw = (w - 0.03) / cols, kd = (d - 0.03) / rows;
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+    if (r === rows - 1 && c > 3 && c < 11) continue;
+    k.add(keyMat, box(kw * 0.82, 0.006, kd * 0.8, -w / 2 + 0.015 + kw * (c + 0.5), 0.015, -d / 2 + 0.015 + kd * (r + 0.5)));
+  }
+  k.add(keyMat, box(kw * 7 * 0.92, 0.006, kd * 0.8, -w / 2 + 0.015 + kw * 7.5, 0.015, -d / 2 + 0.015 + kd * (rows - 0.5)));
+  return k.build();
+}
+
+export function mouse() {
+  const M = materials();
+  const g = new THREE.SphereGeometry(0.03, 16, 10);
+  g.scale(0.9, 0.42, 1.5);
+  g.translate(0, 0.012, 0);
+  return new Kit().add(M.blackSteel, g).build();
+}
+
+export function deskLamp() {
+  const M = materials();
+  const k = new Kit();
+  k.add(M.bronze, cyl(0.075, 0.085, 0.02, 0, 0.01, 0, 24));
+  const arm = new THREE.TubeGeometry(new THREE.CatmullRomCurve3([new THREE.Vector3(0, 0.02, 0), new THREE.Vector3(0.02, 0.28, -0.04), new THREE.Vector3(0.1, 0.44, 0.02), new THREE.Vector3(0.22, 0.42, 0.06)]), 20, 0.008, 6);
+  k.add(M.bronze, arm);
+  const shade = new THREE.ConeGeometry(0.07, 0.1, 20, 1, true);
+  shade.translate(0.24, 0.37, 0.07);
+  k.add(M.darkBronze, shade);
+  k.add(M.warmLight, cyl(0.06, 0.06, 0.005, 0.24, 0.322, 0.07, 18));
+  return k.build();
+}
+
+export function deskPhone() {
+  const M = materials();
+  const k = new Kit();
+  const base = box(0.18, 0.04, 0.2, 0, 0.02, 0); base.rotateX(-0.2);
+  k.add(M.blackSteel, base);
+  k.add(M.blackSteel, box(0.05, 0.035, 0.2, -0.06, 0.06, 0));
+  k.add(M.screenOff, box(0.07, 0.004, 0.05, 0.04, 0.046, -0.04));
+  return k.build();
+}
+
+export function penCup() {
+  const M = materials();
+  const k = new Kit();
+  k.add(M.darkBronze, cyl(0.035, 0.035, 0.1, 0, 0.05, 0, 16));
+  for (let i = 0; i < 5; i++) {
+    const p = cyl(0.005, 0.005, 0.15, 0, 0, 0, 6);
+    p.rotateX((i - 2) * 0.12); p.rotateZ((i % 2 ? 1 : -1) * 0.1);
+    p.translate((i - 2) * 0.008, 0.12, (i % 3 - 1) * 0.01);
+    k.add(i % 2 ? M.blackSteel : M.bronze, p);
+  }
+  return k.build();
+}
+
+export function folderStack(n = 4, seed = 3) {
+  const r = rng(seed);
+  const colors = [0x2a3f5f, 0x6b2f2f, 0x2f4f3a, 0x1f1f1f, 0xb48c5c];
+  const k = new Kit();
+  for (let i = 0; i < n; i++) {
+    const m = new THREE.MeshStandardMaterial({ color: colors[Math.floor(r() * colors.length)], roughness: 0.6 });
+    const f = box(0.24, 0.022, 0.32, 0, 0.011 + i * 0.024, 0);
+    f.rotateY((r() - 0.5) * 0.25);
+    k.add(m, f);
+  }
+  return k.build();
+}
+
+export function swivelChair(color = 0x2b2b2d) {
+  const M = materials();
+  const k = new Kit();
+  const fabric = new THREE.MeshStandardMaterial({ color, roughness: 0.85 });
+  const seat = box(0.48, 0.08, 0.46, 0, 0.47, 0);
+  k.add(fabric, seat);
+  const back = box(0.44, 0.52, 0.06, 0, 0, 0); back.rotateX(-0.12); back.translate(0, 0.8, -0.24);
+  k.add(fabric, back);
+  k.add(M.blackSteel, box(0.36, 0.04, 0.04, 0, 0.62, -0.22));
+  for (const s of [-1, 1]) { k.add(M.blackSteel, box(0.04, 0.2, 0.04, s * 0.25, 0.56, -0.02)); k.add(M.blackSteel, box(0.05, 0.03, 0.26, s * 0.25, 0.66, 0.02)); }
+  k.add(M.steel, cyl(0.025, 0.025, 0.32, 0, 0.27, 0, 10));
+  for (let i = 0; i < 5; i++) {
+    const a = (i / 5) * Math.PI * 2;
+    const leg = box(0.04, 0.03, 0.3, 0, 0, 0.15); leg.rotateY(a); leg.translate(0, 0.07, 0);
+    k.add(M.blackSteel, leg);
+    k.add(M.blackSteel, cyl(0.025, 0.025, 0.03, Math.sin(a) * 0.3, 0.03, Math.cos(a) * 0.3, 10));
+  }
+  return k.build();
+}
+
+export function vaseFlowers(seed = 4) {
+  const M = materials();
+  const r = rng(seed);
+  const k = new Kit();
+  k.add(M.ceramic, (() => { const g = new THREE.LatheGeometry([[0.0, 0], [0.06, 0.0], [0.08, 0.08], [0.05, 0.2], [0.045, 0.24]].map(([a, b]) => new THREE.Vector2(a, b)), 20); return g; })());
+  const petal = new THREE.MeshStandardMaterial({ color: 0xf2ece4, roughness: 0.6 });
+  for (let i = 0; i < 9; i++) {
+    const a = r() * Math.PI * 2, rr = r() * 0.08;
+    k.add(M.leaf, cyl(0.003, 0.003, 0.3, Math.cos(a) * rr * 0.5, 0.36, Math.sin(a) * rr * 0.5, 4));
+    k.add(petal, (() => { const g = new THREE.IcosahedronGeometry(0.035, 1); g.translate(Math.cos(a) * rr, 0.48 + r() * 0.08, Math.sin(a) * rr); return g; })());
+  }
+  return k.build();
+}
+
+export function pendant(drop = 1.2) {
+  const M = materials();
+  const k = new Kit();
+  k.add(M.blackSteel, cyl(0.004, 0.004, drop, 0, -drop / 2, 0, 4));
+  const shade = new THREE.CylinderGeometry(0.12, 0.2, 0.2, 24, 1, true);
+  shade.translate(0, -drop - 0.1, 0);
+  k.add(M.darkBronze, shade);
+  k.add(M.warmLight, cyl(0.17, 0.17, 0.006, 0, -drop - 0.19, 0, 24));
+  return k.build();
+}
